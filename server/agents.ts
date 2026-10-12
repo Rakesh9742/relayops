@@ -2,6 +2,13 @@ import type { Entity, PathStep, ToolTrace } from "../src/types";
 import type { GraphTools, Hit } from "./graph";
 import type { ReasoningClient, ToolCall, ToolSpec } from "./model";
 
+/** Signals the affected service emits about itself. They describe the symptom, not a cause. */
+export const SYMPTOM_SIGNALS = new Set([
+  "http.error_rate",
+  "p95.latency",
+  "sessions.logout_spike",
+]);
+
 /**
  * Agents ask the graph questions through a fixed, read-only tool set.
  * Every call is recorded as a ToolTrace so the UI can show the path behind
@@ -124,8 +131,14 @@ const pathText = (p: PathStep[]) =>
     ? p.map((s) => `${s.from} -${s.relation}-> ${s.to}`).join(" ; ")
     : "(direct)";
 
+export interface ToolObserver {
+  start?(call: ToolCall): void;
+  done?(trace: ToolTrace): void;
+}
+
 export class ToolRunner {
   traces: ToolTrace[] = [];
+  observer?: ToolObserver;
   constructor(
     private graph: GraphTools,
     private tenant: string,
@@ -146,15 +159,18 @@ export class ToolRunner {
     nodeIds: string[],
     paths?: PathStep[],
   ) {
-    this.traces.push({
+    const trace: ToolTrace = {
       tool: call.name,
       args: call.args,
       summary,
       nodeIds: [...new Set(nodeIds)],
       paths,
-    });
+    };
+    this.traces.push(trace);
+    this.observer?.done?.(trace);
   }
   async execute(call: ToolCall): Promise<string> {
+    this.observer?.start?.(call);
     const raw = String(call.args.serviceId ?? "");
     const sid = raw
       ? ((await this.graph.resolve(this.tenant, raw)) ?? raw)
@@ -177,22 +193,40 @@ export class ToolRunner {
             e.matched.forEach((s) => matched.add(s));
             e.unmatched.forEach((s) => unmatched.add(s));
           }
+          // Symptom signals on the affected service (error rate, latency) are
+          // consequences, not causes; only diagnostic signals count.
+          const live = this.liveSignals
+            .map((s) => s.split("=")[0].trim())
+            .filter((s) => !SYMPTOM_SIGNALS.has(s));
+          const unexplained = live.filter((s) => !matched.has(s));
+          const expectedMissing = [...unmatched].filter((s) => !matched.has(s));
+          // Net fit: signals explained minus signals this cause would also
+          // produce but which are absent. A cause whose signature is only
+          // half present is a weaker fit than one whose signature is complete.
+          const fit = matched.size - expectedMissing.length;
           return {
             service: brief(h.node),
             hops: h.depth,
             via: pathText(h.path),
-            rootCauseOf: h.rootCauseOf.map(brief),
-            memories: h.memories.map(brief),
             ...(this.liveSignals.length
               ? {
+                  signalMatch: `${matched.size}/${live.length} diagnostic signals explained, ${expectedMissing.length} expected but absent (fit ${fit})`,
+                  fit,
                   liveSignalsExplained: [...matched],
-                  expectedSignalsNotSeen: [...unmatched].filter(
-                    (s) => !matched.has(s),
-                  ),
+                  liveSignalsUnexplained: unexplained,
+                  expectedSignalsNotSeen: expectedMissing,
                 }
               : {}),
+            rootCauseOf: `${h.rootCauseOf.length} past incidents`,
+            // Curated memory in full; verified outcomes summarised so a busy
+            // service does not drown out a quieter one.
+            memories: h.memories.filter((m) => !m.incidentId).map(brief),
+            verifiedOutcomes: h.memories.filter((m) => m.incidentId).length,
           };
         });
+        // Best signal match first so the strongest evidence leads.
+        if (this.liveSignals.length)
+          out.sort((a: any, b: any) => b.fit - a.fit || a.hops - b.hops);
         this.record(
           call,
           `${hits.length} upstream services; ${hits.filter((h) => h.rootCauseOf.length).length} were root causes before`,
@@ -416,28 +450,14 @@ async function simulatedInvestigation(
     await call("similar_incidents", { serviceId: sid }),
   ) as any[];
   await call("blast_radius", { serviceId: sid });
-  // Score each suspect: a memory whose `signal` matches a live signal is strong
-  // evidence; prior root-cause incidents add weight; nearer services win ties.
-  const signals = (incident.signals ?? []).map((s: string) =>
-    s.split("=")[0].trim(),
-  );
+  // Same rule the model is given: most diagnostic signals explained wins;
+  // history and distance only break ties.
   const score = (s: any) => {
-    // A memory whose signature matches the live signals is the strongest
-    // evidence. Signatures that expect a signal we do not see count against
-    // the suspect (the worker story needs a queue backlog; without one, the
-    // simpler nearer explanation wins).
-    let best = 0;
-    for (const m of s.memories as any[]) {
-      const expected: string[] = m.signals ?? (m.signal ? [m.signal] : []);
-      if (!expected.length) continue;
-      const hit = expected.filter((sig) => signals.includes(sig)).length;
-      const miss = expected.length - hit;
-      best = Math.max(best, hit * 10 - miss * 8);
-    }
+    const fit: number = s.fit ?? 0;
     const resolvedHere = similar.filter(
       (i) => i.rootCause?.id === s.service.id,
     ).length;
-    return best + resolvedHere * 2 + s.rootCauseOf.length - s.hops;
+    return fit * 100 + resolvedHere * 2 - s.hops;
   };
   const ranked = [...suspects].sort((a, b) => score(b) - score(a));
   const top = ranked[0];
@@ -448,12 +468,15 @@ async function simulatedInvestigation(
   const blast =
     runner.traces.find((t) => t.tool === "blast_radius")?.nodeIds ?? [];
   return {
-    summary: `${incident.service} symptoms (${incident.signals?.join(", ") ?? "elevated errors"}) match ${top.rootCauseOf.length} prior incident(s) where ${top.service.name} was the root cause (${top.rootCauseOf.map((i: any) => i.number).join(", ")}). Supporting memory: ${supporting.join(", ")}. Ruled out ${ranked
-      .slice(1)
-      .map((s) => s.service.name)
+    summary: `${top.service.name} explains ${top.signalMatch ?? "the live signals"} (${(top.liveSignalsExplained ?? []).join(", ") || "none"}); ${top.rootCauseOf}. Supporting memory: ${supporting.join(", ")}. Ruled out ${ranked
+      .slice(1, 4)
+      .map(
+        (s) =>
+          `${s.service.name} (${(s.liveSignalsExplained ?? []).length}/${(top.liveSignalsExplained ?? []).length})`,
+      )
       .join(
         ", ",
-      )} because none match the current signal. Downstream impact: ${blast.length} services. Handing to Sage.`,
+      )}. Downstream impact: ${blast.length} services. Handing to Sage.`,
     rootCauseServiceId: top.service.id,
     rootCauseMemoryIds: supporting,
     ruledOut: ranked.slice(1).map((s) => s.service.id),
@@ -518,13 +541,15 @@ export async function investigate(
   graph: GraphTools,
   tenant: string,
   incident: Entity,
+  observer?: ToolObserver,
 ): Promise<Investigation> {
   const runner = new ToolRunner(graph, tenant, incident.signals ?? []);
+  runner.observer = observer;
   if (client.info.provider === "simulation")
     return simulatedInvestigation(runner, incident);
   const run = await client.runTools(
     SYSTEM.replace("{agent}", "Atlas, the investigator") +
-      ` Method: 1) Call suspects on the affected service. 2) Compare the incident's live signals against each suspect's memory "signals"/"signal" fields; a suspect whose memory explains MORE of the live signals is more likely than one that explains fewer, even if it is further away. The nearest service is not automatically the cause. 3) Call similar_incidents to confirm with history. 4) Call blast_radius on your chosen root cause. 5) Call who_knows on the root cause to suggest an escalation. Then call finish. In the summary, state which live signal(s) decided it and which nearer suspect you ruled out and why.`,
+      ` Method: 1) Call suspects on the affected service. Results are sorted by signalMatch. 2) Decision rule: pick the suspect with the highest "fit" = diagnostic signals it explains minus signals its memory says it would also produce but which are absent (expectedSignalsNotSeen). A cause that would produce a signal we do not see is a poor fit. Symptom signals on the affected service itself (http.error_rate, p95.latency, logouts) are consequences of any cause and never discriminate; do not count them. Past-incident counts and hop distance only break ties. 3) Call similar_incidents on the AFFECTED service (not the suspect) to see history across the whole dependency scope. 4) Call blast_radius on your chosen root cause. 5) Call who_knows on the root cause. Then call finish. In the summary, name the decisive diagnostic signal(s), the suspect you ruled out, and why.`,
     JSON.stringify({
       incident: {
         id: incident.id,
@@ -541,10 +566,16 @@ export async function investigate(
     (c) => runner.execute(c),
   );
   const v = run.verdict;
-  if (!v?.rootCauseServiceId)
-    throw new Error(
-      "Atlas did not identify a root cause. Retry the investigation.",
-    );
+  if (!v?.rootCauseServiceId) {
+    const fallback = await simulatedInvestigation(runner, incident);
+    return {
+      ...fallback,
+      summary: run.text?.trim()
+        ? `${run.text.trim()} (Root cause selected by policy.)`
+        : fallback.summary,
+      simulated: false,
+    };
+  }
   return {
     summary: String(v.summary ?? run.text),
     rootCauseServiceId: String(v.rootCauseServiceId),
@@ -567,8 +598,10 @@ export async function plan(
   tenant: string,
   incident: Entity,
   investigation: Investigation,
+  observer?: ToolObserver,
 ): Promise<PlanDraft> {
   const runner = new ToolRunner(graph, tenant);
+  runner.observer = observer;
   if (client.info.provider === "simulation")
     return simulatedPlan(runner, incident, investigation);
   const run = await client.runTools(
@@ -592,10 +625,18 @@ export async function plan(
     (c) => runner.execute(c),
   );
   const v = run.verdict;
-  if (!v?.procedureId || !v?.factId)
-    throw new Error(
-      "Sage did not select a procedure and a current fact. Retry.",
-    );
+  if (!v?.procedureId || !v?.factId) {
+    // The model answered in prose without calling finish. Fall back to the
+    // deterministic policy; its traces are appended so the record is complete.
+    const fallback = await simulatedPlan(runner, incident, investigation);
+    return {
+      ...fallback,
+      summary: run.text?.trim()
+        ? `${run.text.trim()} (Structured plan selected by policy.)`
+        : fallback.summary,
+      simulated: false,
+    };
+  }
   return {
     summary: String(v.summary ?? run.text),
     procedureId: String(v.procedureId),
@@ -616,8 +657,10 @@ export async function answer(
   question: string,
   conversation: Array<{ role: string; content: string }>,
   fallback: string,
+  observer?: ToolObserver,
 ): Promise<{ text: string; traces: ToolTrace[] }> {
   const runner = new ToolRunner(graph, tenant);
+  runner.observer = observer;
   if (client.info.provider === "simulation")
     return { text: fallback, traces: [] };
   const run = await client.runTools(

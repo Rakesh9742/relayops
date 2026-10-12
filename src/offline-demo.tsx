@@ -119,6 +119,7 @@ async function start() {
           model: "simulation",
           modelInfo: engine.modelInfo,
           serverStartedAt: startedAt,
+          live: engine.live(tenant),
         };
       else if (path === "/api/workspace") {
         if (!WORKSPACES.some((w) => w.id === body.id))

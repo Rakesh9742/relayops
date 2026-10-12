@@ -1,8 +1,14 @@
-import type { AgentId, Edge, Entity } from "../src/types";
+import type { AgentId, Edge, Entity, LiveActivity } from "../src/types";
 import type { Store } from "./store";
 import { entity } from "./seed";
 import { IndexedGraph, type GraphTools } from "./graph";
-import { investigate, plan as draftPlan, answer } from "./agents";
+import {
+  investigate,
+  plan as draftPlan,
+  answer,
+  SYMPTOM_SIGNALS,
+  type ToolObserver,
+} from "./agents";
 import {
   ReasoningClient,
   modelConfigFromEnv,
@@ -88,6 +94,43 @@ export class Engine {
   }
   get modelInfo() {
     return this.reasoning.info;
+  }
+  /** In-flight agent activity per tenant, visible to the UI before commit. */
+  private liveByTenant = new Map<string, Map<string, LiveActivity>>();
+  live(tenant: string): LiveActivity[] {
+    return [...(this.liveByTenant.get(tenant)?.values() ?? [])];
+  }
+  private beginLive(
+    tenant: string,
+    incidentId: string,
+    agent: AgentId,
+  ): ToolObserver {
+    const activity: LiveActivity = {
+      incidentId,
+      agent,
+      startedAt: Date.now(),
+      traces: [],
+    };
+    const map =
+      this.liveByTenant.get(tenant) ??
+      this.liveByTenant.set(tenant, new Map()).get(tenant)!;
+    map.set(incidentId, activity);
+    return {
+      start: (call) => {
+        activity.pending = {
+          tool: call.name,
+          args: call.args,
+          startedAt: Date.now(),
+        };
+      },
+      done: (trace) => {
+        activity.pending = undefined;
+        activity.traces.push(trace);
+      },
+    };
+  }
+  private endLive(tenant: string, incidentId: string) {
+    this.liveByTenant.get(tenant)?.delete(incidentId);
   }
   checkModel() {
     return this.reasoning.check();
@@ -309,6 +352,7 @@ export class Engine {
           this.graph,
           tenant,
           incident,
+          this.beginLive(tenant, id, "atlas"),
         );
         const rootCause = await this.store.get(
           tenant,
@@ -368,6 +412,7 @@ export class Engine {
           tenant,
           incident,
           incident.investigation,
+          this.beginLive(tenant, id, "sage"),
         );
         const procedure = await this.store.get(tenant, draft.procedureId);
         const fact = await this.store.get(tenant, draft.factId);
@@ -495,6 +540,11 @@ export class Engine {
           agent: "echo",
           confidence: 1,
           incidentId: id,
+          // The diagnostic signals that pointed here, so this memory
+          // strengthens the same diagnosis next time.
+          signals: (incident.signals ?? [])
+            .map((s: string) => s.split("=")[0].trim())
+            .filter((s: string) => !SYMPTOM_SIGNALS.has(s)),
           action: undefined,
         });
         nodes.push(learned);
@@ -559,6 +609,7 @@ export class Engine {
           .map((m) => ({ id: m.id, version: m.version })),
       ];
       const committed = await this.store.commit(tenant, nodes, edges, guards);
+      this.endLive(tenant, id);
       if (!committed) await this.release(tenant, task);
       return committed;
     } catch (err) {
@@ -580,6 +631,7 @@ export class Engine {
           [{ id, version: current.version }],
         );
       }
+      this.endLive(tenant, id);
       await this.release(tenant, task);
       return false;
     }
@@ -706,15 +758,22 @@ export class Engine {
         content: String(n.content).slice(0, 2000),
       }));
     const fallback = `The incident is ${incident.status.replaceAll("_", " ")}. ${selected.map((m) => m.content).join(" ")}${incident.status === "awaiting_approval" ? " The recovery plan is waiting for your approval." : ""}`;
-    const result = await answer(
-      this.reasoning,
-      this.graph,
-      tenant,
-      incident,
-      text,
-      conversation,
-      fallback,
-    );
+    const liveKey = `${id}:chat`;
+    let result: Awaited<ReturnType<typeof answer>>;
+    try {
+      result = await answer(
+        this.reasoning,
+        this.graph,
+        tenant,
+        incident,
+        text,
+        conversation,
+        fallback,
+        this.beginLive(tenant, liveKey, "atlas"),
+      );
+    } finally {
+      this.endLive(tenant, liveKey);
+    }
     const reply = entity(`msg-${randomUUID()}`, "message", {
       incidentId: id,
       role: "assistant",

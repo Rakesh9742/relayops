@@ -175,6 +175,506 @@ function TraceList({
   );
 }
 
+/**
+ * Focused subgraph around one incident that animates while agents query it.
+ * Shows the pending query, highlights nodes and paths as results arrive, and
+ * lists what the agents changed in the graph.
+ */
+function LiveGraph({
+  incident,
+  state,
+  select,
+}: {
+  incident: Entity;
+  state: Snapshot;
+  select: (m: Entity) => void;
+}) {
+  const byId = new Map(state.nodes.map((n) => [n.id, n]));
+  const live =
+    state.live?.find((l) => l.incidentId === incident.id) ??
+    state.live?.find((l) => l.incidentId === `${incident.id}:chat`);
+  const events = state.nodes
+    .filter((n) => n.kind === "event" && n.incidentId === incident.id)
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const lastTraced = [...events].reverse().find((e) => e.traces?.length);
+  const traces: ToolTrace[] = live
+    ? live.traces
+    : ((lastTraced?.traces as ToolTrace[]) ?? []);
+  const [cursor, setCursor] = useState<number | null>(null);
+  useEffect(() => setCursor(null), [live?.startedAt, lastTraced?.id]);
+  const shownTraces = cursor === null ? traces : traces.slice(0, cursor + 1);
+  const latest = shownTraces.at(-1);
+
+  // Subgraph: affected service + 2 structural hops each way + attached context.
+  const STRUCT = new Set(["DEPENDS_ON", "ROUTES_TO"]);
+  const core = new Set<string>([incident.serviceId]);
+  let frontier = [incident.serviceId];
+  for (let d = 0; d < 2; d++) {
+    const next: string[] = [];
+    for (const e of state.edges) {
+      if (!STRUCT.has(e.relation)) continue;
+      if (frontier.includes(e.from) && !core.has(e.to)) {
+        core.add(e.to);
+        next.push(e.to);
+      }
+      if (frontier.includes(e.to) && !core.has(e.from)) {
+        core.add(e.from);
+        next.push(e.from);
+      }
+    }
+    frontier = next;
+  }
+  // Nodes the agents have actually touched: anything on a returned path, plus
+  // the direct results of people/decision/memory lookups. Wide "suspects"
+  // results only add the services on their paths, not every attached memory.
+  const touched = new Set<string>();
+  for (const t of traces) {
+    for (const p of t.paths ?? []) {
+      touched.add(p.from);
+      touched.add(p.to);
+    }
+    if (["who_knows", "decisions", "memories"].includes(t.tool))
+      t.nodeIds.forEach((id) => touched.add(id));
+    if (t.tool === "similar_incidents")
+      t.nodeIds
+        .filter((id) => byId.get(id)?.kind === "incident")
+        .forEach((id) => touched.add(id));
+  }
+  if (incident.investigation?.rootCauseServiceId)
+    touched.add(incident.investigation.rootCauseServiceId);
+  incident.investigation?.rootCauseMemoryIds?.forEach((id: string) =>
+    touched.add(id),
+  );
+  incident.plan?.memoryIds?.forEach((id: string) => touched.add(id));
+  incident.plan?.decisionIds?.forEach((id: string) => touched.add(id));
+  const include = new Set<string>(core);
+  // One hop of context off the affected service only; everything else must be touched.
+  for (const e of state.edges) {
+    if (
+      e.from === incident.serviceId &&
+      ["HAS_MEMORY", "OWNS"].includes(e.relation)
+    )
+      include.add(e.to);
+    if (
+      e.to === incident.serviceId &&
+      ["OWNS", "ON_CALL_FOR"].includes(e.relation)
+    )
+      include.add(e.from);
+    if (e.from === incident.id && e.relation === "ROOT_CAUSE")
+      include.add(e.to);
+  }
+  for (const id of touched) include.add(id);
+  const outcome = byId.get(`${incident.id}:memory:outcome`);
+  if (outcome) include.add(outcome.id);
+  include.add(incident.id);
+  const WORKFLOW = new Set(["event", "task", "message"]);
+  const nodes = state.nodes.filter(
+    (n) => include.has(n.id) && !WORKFLOW.has(n.kind),
+  );
+  const shown = new Set(nodes.map((n) => n.id));
+  const edges = state.edges.filter(
+    (e) =>
+      shown.has(e.from) &&
+      shown.has(e.to) &&
+      !["HAS_EVENT", "HAS_TASK", "HAS_MESSAGE"].includes(e.relation),
+  );
+
+  // Highlight sets from the traces shown so far; the latest one is "hot".
+  const seen = new Set<string>();
+  const seenEdges = new Set<string>();
+  const hot = new Set<string>();
+  const hotEdges = new Set<string>();
+  const key = (p: { from: string; relation: string; to: string }) =>
+    `${p.from}|${p.relation.replace(" (shared)", "")}|${p.to}`;
+  shownTraces.forEach((t, i) => {
+    const target = t === latest ? hot : seen;
+    const targetEdges = t === latest ? hotEdges : seenEdges;
+    t.nodeIds.forEach((id) => target.add(id));
+    (t.paths ?? []).forEach((p) => {
+      target.add(p.from);
+      target.add(p.to);
+      targetEdges.add(key(p));
+    });
+    void i;
+  });
+  const pendingTarget = live?.pending
+    ? String(live.pending.args.serviceId ?? live.pending.args.from ?? "")
+    : "";
+
+  // Layout: columns by kind, rows sorted so the affected service is near the middle.
+  const columns: Array<{ kinds: string[]; x: number; title: string }> = [
+    { kinds: ["person", "team"], x: 110, title: "PEOPLE" },
+    { kinds: ["service"], x: 400, title: "SERVICES" },
+    { kinds: ["incident"], x: 690, title: "INCIDENTS" },
+    { kinds: ["memory"], x: 960, title: "MEMORY" },
+    { kinds: ["decision"], x: 1230, title: "DECISIONS" },
+  ];
+  const ROW = 40;
+  const positions = new Map<string, { x: number; y: number }>();
+  let height = 160;
+  for (const col of columns) {
+    const items = nodes
+      .filter((n) => col.kinds.includes(n.kind))
+      .sort((a, b) => {
+        if (a.kind === "service") {
+          const rank = (n: Entity) =>
+            n.tier === "edge"
+              ? 0
+              : n.type === "database" || n.type === "index"
+                ? 3
+                : n.type === "external"
+                  ? 4
+                  : 1;
+          return rank(a) - rank(b) || a.name.localeCompare(b.name);
+        }
+        if (a.kind === "memory")
+          return (
+            (a.serviceId ?? "").localeCompare(b.serviceId ?? "") ||
+            a.createdAt - b.createdAt
+          );
+        if (a.kind === "incident")
+          return (
+            (a.id === incident.id ? -1 : 0) - (b.id === incident.id ? -1 : 0) ||
+            b.createdAt - a.createdAt
+          );
+        return (a.name ?? a.title ?? "").localeCompare(b.name ?? b.title ?? "");
+      });
+    items.forEach((n, i) => positions.set(n.id, { x: col.x, y: 70 + i * ROW }));
+    height = Math.max(height, 70 + items.length * ROW + 30);
+  }
+  const width = 1360;
+  const color = (n: Entity) =>
+    n.kind === "service"
+      ? n.type === "database" || n.type === "index"
+        ? "#204e3e"
+        : "#3b7a5c"
+      : n.kind === "person"
+        ? "#5675ca"
+        : n.kind === "team"
+          ? "#7b8fcf"
+          : n.kind === "incident"
+            ? n.id === incident.id
+              ? "#d2553a"
+              : "#c39149"
+            : n.kind === "decision"
+              ? n.status === "rejected"
+                ? "#b65a4a"
+                : "#8a7a4a"
+              : n.category === "semantic"
+                ? "#a088b6"
+                : n.category === "episodic"
+                  ? "#d19d64"
+                  : "#6c9b7e";
+  const label = (n: Entity) => {
+    const t = n.name ?? n.number ?? n.title ?? n.id;
+    return t.length > 26 ? `${t.slice(0, 25)}…` : t;
+  };
+
+  // What changed: edges and nodes this incident's agents wrote.
+  const changes: Array<{ at: number; text: string; ids: string[] }> = [];
+  for (const e of state.edges)
+    if (e.from === incident.id && e.relation === "ROOT_CAUSE")
+      changes.push({
+        at: incident.investigation?.createdAt ?? 0,
+        text: `ROOT_CAUSE → ${label(byId.get(e.to)!)}`,
+        ids: [e.to],
+      });
+  for (const e of events) {
+    if (e.type === "correction")
+      changes.push({
+        at: e.createdAt,
+        text: `Memory superseded: ${e.memoryIds?.map((id: string) => label(byId.get(id) ?? ({ id } as Entity))).join(" → ")}`,
+        ids: e.memoryIds ?? [],
+      });
+    if (e.type === "plan")
+      changes.push({
+        at: e.createdAt,
+        text: `Plan USES ${e.memoryIds?.length ?? 0} memories`,
+        ids: e.memoryIds ?? [],
+      });
+    if (e.type === "handoff")
+      changes.push({
+        at: e.createdAt,
+        text: `Sandbox applied: ${incident.plan?.action ?? "recovery"}`,
+        ids: [],
+      });
+    if (e.type === "resolved") {
+      const learned = byId.get(`${incident.id}:memory:outcome`);
+      if (learned)
+        changes.push({
+          at: e.createdAt,
+          text: `New episodic memory on ${label(byId.get(learned.serviceId)!)}`,
+          ids: [learned.id],
+        });
+      const proc = incident.plan
+        ? byId.get(incident.plan.procedureId)
+        : undefined;
+      if (proc)
+        changes.push({
+          at: e.createdAt,
+          text: `${label(proc)} verifiedRuns → ${proc.verifiedRuns}`,
+          ids: [proc.id],
+        });
+    }
+  }
+  changes.sort((a, b) => a.at - b.at);
+  const anyHighlight = hot.size > 0 || seen.size > 0;
+
+  return (
+    <div className="live-graph">
+      <div className="live-status">
+        {live ? (
+          <>
+            <span className="live-dot" />
+            <strong>{agentBy(live.agent)?.name}</strong>
+            {live.pending ? (
+              <span>
+                running{" "}
+                <code>
+                  {TOOL_LABELS[live.pending.tool] ?? live.pending.tool}
+                </code>
+                {pendingTarget && (
+                  <>
+                    {" "}
+                    on{" "}
+                    <b>
+                      {label(
+                        byId.get(pendingTarget) ??
+                          ({ id: pendingTarget } as Entity),
+                      )}
+                    </b>
+                  </>
+                )}
+                …
+              </span>
+            ) : (
+              <span>thinking over {live.traces.length} results…</span>
+            )}
+          </>
+        ) : lastTraced ? (
+          <>
+            <strong>{agentBy(lastTraced.agent)?.name}</strong>
+            <span>{lastTraced.title}</span>
+          </>
+        ) : (
+          <span>
+            Start the investigation to watch the agents query the graph.
+          </span>
+        )}
+      </div>
+      {traces.length > 0 && (
+        <div className="live-steps">
+          {traces.map((t, i) => {
+            const active =
+              cursor === null ? i === traces.length - 1 : i === cursor;
+            return (
+              <button
+                key={i}
+                className={active ? "active" : ""}
+                onClick={() => setCursor(i === traces.length - 1 ? null : i)}
+              >
+                <span>{i + 1}</span>
+                <code>{TOOL_LABELS[t.tool] ?? t.tool}</code>
+                <em>{t.summary}</em>
+              </button>
+            );
+          })}
+          {live?.pending && (
+            <button className="pending" disabled>
+              <span>{traces.length + 1}</span>
+              <code>{TOOL_LABELS[live.pending.tool] ?? live.pending.tool}</code>
+              <em>running…</em>
+            </button>
+          )}
+        </div>
+      )}
+      <div
+        className="graph-viewport live"
+        role="region"
+        aria-label="Live incident graph"
+        tabIndex={0}
+      >
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          role="group"
+          aria-label="Incident subgraph"
+        >
+          <defs>
+            <pattern
+              id="dots-live"
+              x="0"
+              y="0"
+              width="18"
+              height="18"
+              patternUnits="userSpaceOnUse"
+            >
+              <circle cx="1" cy="1" r=".8" fill="#d6ddd6" />
+            </pattern>
+            <marker
+              id="arrow-live"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M0,0 L10,5 L0,10 z" fill="#9fb3a6" />
+            </marker>
+            <marker
+              id="arrow-live-hot"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M0,0 L10,5 L0,10 z" fill="#d2553a" />
+            </marker>
+            <marker
+              id="arrow-live-seen"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M0,0 L10,5 L0,10 z" fill="#c39149" />
+            </marker>
+          </defs>
+          <rect width={width} height={height} fill="url(#dots-live)" />
+          {columns.map((c) => (
+            <text
+              key={c.title}
+              x={c.x}
+              y={40}
+              textAnchor="middle"
+              className="graph-category"
+            >
+              {c.title}
+            </text>
+          ))}
+          {edges.map((e, i) => {
+            const a = positions.get(e.from);
+            const b = positions.get(e.to);
+            if (!a || !b) return null;
+            const k = `${e.from}|${e.relation}|${e.to}`;
+            const isHot = hotEdges.has(k);
+            const isSeen = !isHot && seenEdges.has(k);
+            const dx = b.x - a.x;
+            const sameCol = Math.abs(dx) < 1;
+            const x1 = a.x + (dx > 0 ? 66 : dx < 0 ? -66 : 0);
+            const x2 = b.x + (dx > 0 ? -70 : dx < 0 ? 70 : 0);
+            const d = sameCol
+              ? `M${a.x + 66},${a.y} C${a.x + 120},${a.y} ${b.x + 120},${b.y} ${b.x + 66},${b.y}`
+              : `M${x1},${a.y} C${(x1 + x2) / 2},${a.y} ${(x1 + x2) / 2},${b.y} ${x2},${b.y}`;
+            return (
+              <path
+                key={i}
+                d={d}
+                fill="none"
+                className={isHot ? "edge-hot" : ""}
+                stroke={isHot ? "#d2553a" : isSeen ? "#c39149" : "#b7cbbd"}
+                strokeWidth={isHot ? 2.4 : isSeen ? 1.6 : 1}
+                opacity={anyHighlight && !isHot && !isSeen ? 0.15 : 1}
+                markerEnd={
+                  isHot
+                    ? "url(#arrow-live-hot)"
+                    : isSeen
+                      ? "url(#arrow-live-seen)"
+                      : "url(#arrow-live)"
+                }
+              >
+                <title>
+                  {label(byId.get(e.from)!)} {e.relation}{" "}
+                  {label(byId.get(e.to)!)}
+                </title>
+              </path>
+            );
+          })}
+          {nodes.map((n) => {
+            const p = positions.get(n.id);
+            if (!p) return null;
+            const isHot = hot.has(n.id);
+            const isSeen = !isHot && seen.has(n.id);
+            const isPending = pendingTarget === n.id;
+            const isSelf = n.id === incident.id || n.id === incident.serviceId;
+            const superseded = n.status === "superseded";
+            return (
+              <g
+                className={`graph-node ${isPending ? "node-pending" : ""}`}
+                key={n.id}
+                role={n.kind === "memory" ? "button" : undefined}
+                tabIndex={n.kind === "memory" ? 0 : undefined}
+                opacity={
+                  anyHighlight && !isHot && !isSeen && !isSelf && !isPending
+                    ? 0.3
+                    : 1
+                }
+                onClick={() => n.kind === "memory" && select(n)}
+              >
+                <title>
+                  {n.kind}: {n.name ?? n.number ?? n.title}
+                </title>
+                <rect
+                  x={p.x - 66}
+                  y={p.y - 15}
+                  width="132"
+                  height="30"
+                  rx="8"
+                  fill={isSelf ? "#f6efe9" : "#fff"}
+                  stroke={
+                    isPending
+                      ? "#5675ca"
+                      : isHot
+                        ? "#d2553a"
+                        : isSeen
+                          ? "#c39149"
+                          : superseded
+                            ? "#c8bda9"
+                            : isSelf
+                              ? "#d2553a"
+                              : "#dce3db"
+                  }
+                  strokeWidth={isHot || isPending || isSelf ? 2 : 1}
+                  strokeDasharray={superseded ? "4 3" : undefined}
+                />
+                <circle cx={p.x - 52} cy={p.y} r="4.5" fill={color(n)} />
+                <text x={p.x - 42} y={p.y + 4} fontSize="11" fill="#1f2d27">
+                  {label(n)}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="live-changes">
+        <div className="trace-header">
+          <GitBranch size={12} />
+          <span>What the agents changed in the graph</span>
+        </div>
+        {changes.length === 0 ? (
+          <p className="live-empty">
+            Nothing written yet. Reads are shown above; writes appear here as
+            they commit.
+          </p>
+        ) : (
+          <ul>
+            {changes.map((c, i) => (
+              <li key={i}>
+                <time>{timestamp(c.at)}</time>
+                <span>{c.text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Logo({ small = false }: { small?: boolean }) {
   return (
     <div className={`brand ${small ? "small" : ""}`}>
@@ -342,6 +842,8 @@ export default function App({
   initialState?: Snapshot | null;
 }) {
   const [state, setState] = useState<Snapshot | null>(initialState);
+  const stateRef = useRef<Snapshot | null>(initialState);
+  stateRef.current = state;
   const [view, setView] = useState<View>("overview");
   const [selected, setSelected] = useState<string | null>(() =>
     typeof window === "undefined"
@@ -391,8 +893,14 @@ export default function App({
         }
       }
     })();
-    const timer = setInterval(load, 1700);
-    return () => clearInterval(timer);
+    // Poll faster while an agent is mid-investigation so the live graph animates.
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      await load();
+      timer = setTimeout(tick, stateRef.current?.live?.length ? 600 : 1700);
+    };
+    timer = setTimeout(tick, 1700);
+    return () => clearTimeout(timer);
   }, [load]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -1122,10 +1630,20 @@ function IncidentPanel({
     incident.status === "resolved" || incident.stage >= 4,
   ];
   const evidence = events.filter((e) => e.evidence?.length);
+  const liveNow = state.live?.some(
+    (l) =>
+      l.incidentId === incident.id || l.incidentId === `${incident.id}:chat`,
+  );
   useEffect(() => {
     setText("");
     setTab("timeline");
   }, [incident.id]);
+  // Jump to the live graph the moment an investigation starts.
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (liveNow && !wasLive.current && tab === "timeline") setTab("graph");
+    wasLive.current = !!liveNow;
+  }, [liveNow, tab]);
   return (
     <section className="panel incident-panel">
       <div className="incident-top">
@@ -1259,6 +1777,7 @@ function IncidentPanel({
         <div>
           {[
             { id: "timeline", name: "Live timeline", icon: Activity },
+            { id: "graph", name: "Live graph", icon: Waypoints },
             { id: "conversation", name: "Conversation", icon: MessageSquare },
             { id: "evidence", name: "Evidence", icon: FileText },
           ].map((t) => (
@@ -1270,6 +1789,7 @@ function IncidentPanel({
               <t.icon size={14} />
               {t.name}
               {t.id === "timeline" && <span>{events.length}</span>}
+              {t.id === "graph" && liveNow && <span className="live-dot" />}
             </button>
           ))}
         </div>
@@ -1464,6 +1984,9 @@ function IncidentPanel({
             workspace.
           </div>
         </div>
+      )}
+      {tab === "graph" && (
+        <LiveGraph incident={incident} state={state} select={memoryClick} />
       )}
       {tab === "evidence" && (
         <div className="evidence-tab">

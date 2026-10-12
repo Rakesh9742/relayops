@@ -66,6 +66,16 @@ export interface ModelInfo {
   checkedAt: number | null;
   error?: string;
 }
+/** In-flight agent work, published before it is committed. */
+export interface LiveActivity {
+  incidentId: string;
+  agent: AgentId;
+  startedAt: number;
+  traces: ToolTrace[];
+  /** Graph query currently running, if any. */
+  pending?: { tool: string; args: Record<string, any>; startedAt: number };
+}
+
 export interface Snapshot {
   workspace: Workspace;
   workspaces: Workspace[];
@@ -75,6 +85,7 @@ export interface Snapshot {
   model: ModelInfo["provider"];
   modelInfo: ModelInfo;
   serverStartedAt: number;
+  live?: LiveActivity[];
 }
 
 /** One hop in a graph path, used to show the reasoning behind an answer. */

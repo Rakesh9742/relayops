@@ -132,6 +132,7 @@ export function createApp(
       model: engine.modelInfo.provider,
       modelInfo: engine.modelInfo,
       serverStartedAt: options.startedAt ?? 0,
+      live: engine.live(tenant),
     });
   });
   app.post("/api/model/check", async (_req, res) => {

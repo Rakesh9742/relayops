@@ -1361,6 +1361,172 @@ kbd {
 .trace li.more {
   color: var(--text-secondary);
 }
+/* Live graph tab */
+.live-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0 4px;
+}
+.live-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  min-height: 24px;
+}
+.live-status strong {
+  color: #1f2d27;
+}
+.live-status code {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  background: #e6efe3;
+  color: #204e3e;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d2553a;
+  box-shadow: 0 0 0 0 rgba(210, 85, 58, 0.5);
+  animation: live-pulse 1.4s infinite;
+}
+.incident-tabs button .live-dot {
+  margin-left: 6px;
+}
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(210, 85, 58, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(210, 85, 58, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(210, 85, 58, 0);
+  }
+}
+.live-steps {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.live-steps button {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px 5px 6px;
+  border: 1px solid #dce3db;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.78rem;
+  max-width: 100%;
+}
+.live-steps button span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #eef2ea;
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+.live-steps button code {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: #204e3e;
+}
+.live-steps button em {
+  font-style: normal;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.live-steps button.active {
+  border-color: #d2553a;
+  background: #fff5f1;
+}
+.live-steps button.active span {
+  background: #d2553a;
+  color: #fff;
+}
+.live-steps button.pending {
+  border-style: dashed;
+  cursor: default;
+}
+.live-steps button.pending span {
+  background: #5675ca;
+  color: #fff;
+}
+.graph-viewport.live {
+  max-height: 520px;
+  border: 1px solid #e3e9df;
+  border-radius: 10px;
+  overflow: auto;
+}
+.graph-viewport.live svg {
+  min-width: 1100px;
+}
+.edge-hot {
+  stroke-dasharray: 6 4;
+  animation: edge-flow 0.8s linear infinite;
+}
+@keyframes edge-flow {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+.node-pending rect {
+  animation: node-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes node-pulse {
+  from {
+    stroke-width: 1.5;
+  }
+  to {
+    stroke-width: 3.5;
+  }
+}
+.live-changes {
+  border: 1px solid #e3e9df;
+  border-radius: 8px;
+  background: #fbfcf8;
+  overflow: hidden;
+}
+.live-changes ul {
+  list-style: none;
+  margin: 0;
+  padding: 6px 10px 8px;
+}
+.live-changes li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 0.8rem;
+  padding: 3px 0;
+}
+.live-changes time {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+.live-empty {
+  margin: 0;
+  padding: 8px 10px 10px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
 .plan-forbidden {
   display: inline-flex;
   align-items: center;

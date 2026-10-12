@@ -27,7 +27,18 @@ test("incident, memory correction, persistence and tenant switch work end to end
   await expect(
     page.getByRole("button", { name: "Approve & resolve" }),
   ).toBeVisible({ timeout: 90000 });
+  // The panel switched to the live graph while agents worked; it shows the
+  // steps they took and what they wrote.
+  await expect(page.locator(".incident-tabs button.active")).toHaveText(
+    /Live graph/,
+  );
+  expect(await page.locator(".live-steps button").count()).toBeGreaterThan(2);
+  await expect(page.locator(".live-changes")).toContainText("ROOT_CAUSE");
+  expect(
+    await page.locator(".graph-viewport.live .graph-node").count(),
+  ).toBeGreaterThan(10);
   // Atlas and Sage each recorded the graph queries behind their conclusions.
+  await page.getByRole("button", { name: "Live timeline" }).click();
   await expect(page.locator(".trace-list")).toHaveCount(2);
   await expect(page.locator(".investigation-card")).toContainText(
     "Root cause:",
