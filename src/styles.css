@@ -1268,6 +1268,126 @@ kbd {
   padding: 6px 8px;
   overflow-wrap: anywhere;
 }
+/* Graph query traces under an agent event */
+.trace-list {
+  margin-top: 10px;
+  border: 1px solid #e3e9df;
+  border-radius: 8px;
+  background: #fbfcf8;
+  overflow: hidden;
+}
+.trace-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  border-bottom: 1px solid #eaf0df;
+}
+.trace button {
+  all: unset;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  font-size: 0.8125rem;
+  border-top: 1px solid #f0f3ea;
+}
+.trace:first-of-type button {
+  border-top: none;
+}
+.trace button:hover {
+  background: #f3f6ee;
+}
+.trace button code {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: #204e3e;
+  background: #e6efe3;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.trace button span {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.trace button em {
+  font-style: normal;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace button svg {
+  transition: transform 0.15s;
+}
+.trace.open button svg {
+  transform: rotate(180deg);
+}
+.trace ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px 10px 8px 10px;
+  background: #f6f8f2;
+}
+.trace li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  padding: 3px 0;
+}
+.trace li b {
+  font-weight: 500;
+  color: #1f2d27;
+}
+.trace li i {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: #8a5a3a;
+  background: #fbefe6;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.trace li.more {
+  color: var(--text-secondary);
+}
+.plan-forbidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #b65a4a;
+  font-size: 0.8125rem;
+}
+.investigation-card .plan-label strong {
+  color: #204e3e;
+}
+.graph-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.graph-toggle input {
+  margin: 0;
+}
+.graph-title button.link {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: #3b7a5c;
+  text-decoration: underline;
+  margin-left: 8px;
+}
 .ready-context {
   display: flex;
   align-items: center;

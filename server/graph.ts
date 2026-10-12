@@ -27,6 +27,8 @@ export interface PersonHit extends Hit {
   reasons: string[];
 }
 export interface GraphTools {
+  /** Resolve a node id, exact name, or case-insensitive name/number to an id. */
+  resolve(tenant: string, ref: string): Promise<string | undefined>;
   /** Services that break if `serviceId` fails: reverse DEPENDS_ON / ROUTES_TO. */
   blastRadius(tenant: string, serviceId: string, depth?: number): Promise<Hit[]>;
   /** Services `serviceId` depends on, with incidents where each was the root cause and active memory. */
@@ -98,6 +100,22 @@ export class IndexedGraph implements GraphTools {
   }
   private active(n: Entity | undefined): n is Entity {
     return !!n && n.kind === "memory" && n.status === "active";
+  }
+
+  async resolve(tenant: string, ref: string) {
+    const g = await this.index(tenant);
+    if (g.get(ref)) return ref;
+    const needle = ref.trim().toLowerCase();
+    if (!needle) return undefined;
+    for (const n of g.nodes.values()) {
+      if (
+        String(n.name ?? "").toLowerCase() === needle ||
+        String(n.number ?? "").toLowerCase() === needle ||
+        String(n.handle ?? "").toLowerCase() === needle
+      )
+        return n.id;
+    }
+    return undefined;
   }
 
   async blastRadius(tenant: string, serviceId: string, depth = 3) {

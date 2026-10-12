@@ -64,6 +64,7 @@ import {
   type Entity,
   type MemoryType,
   type Snapshot,
+  type ToolTrace,
 } from "./types";
 
 type View = "overview" | "incidents" | "memory" | "agents" | "settings";
@@ -100,6 +101,77 @@ const timestamp = (time: number) =>
     hour12: false,
   });
 const agentBy = (id: string) => AGENTS.find((a) => a.id === id);
+const nodeLabel = (n: Entity | undefined, id: string) =>
+  n?.name ?? n?.number ?? n?.title ?? id;
+const TOOL_LABELS: Record<string, string> = {
+  suspects: "Upstream suspects",
+  similar_incidents: "Similar incidents",
+  blast_radius: "Blast radius",
+  decisions: "Decisions",
+  who_knows: "Who knows this",
+  memories: "Memory lookup",
+  path: "Path",
+};
+
+/** The graph queries an agent ran, with the paths behind each answer. */
+function TraceList({
+  traces,
+  nodes,
+  simulated,
+}: {
+  traces: ToolTrace[];
+  nodes: Entity[];
+  simulated?: boolean;
+}) {
+  const [open, setOpen] = useState<number | null>(null);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  return (
+    <div className="trace-list">
+      <div className="trace-header">
+        <Waypoints size={12} />
+        <span>
+          {traces.length} graph {traces.length === 1 ? "query" : "queries"}
+          {simulated ? " · deterministic" : " · model-selected"}
+        </span>
+      </div>
+      {traces.map((t, i) => {
+        const args = Object.values(t.args).map(String).join(" → ");
+        const paths = (t.paths ?? []).slice(0, 8);
+        return (
+          <div className={`trace ${open === i ? "open" : ""}`} key={i}>
+            <button onClick={() => setOpen(open === i ? null : i)}>
+              <code>{TOOL_LABELS[t.tool] ?? t.tool}</code>
+              <span>{args}</span>
+              <em>{t.summary}</em>
+              <ChevronDown size={12} />
+            </button>
+            {open === i && paths.length > 0 && (
+              <ul>
+                {paths.map((p, j) => (
+                  <li key={j}>
+                    <b>{nodeLabel(byId.get(p.from), p.from)}</b>
+                    <i>{p.relation}</i>
+                    <b>{nodeLabel(byId.get(p.to), p.to)}</b>
+                  </li>
+                ))}
+                {(t.paths?.length ?? 0) > 8 && <li className="more">+{t.paths!.length - 8} more</li>}
+              </ul>
+            )}
+            {open === i && paths.length === 0 && t.nodeIds.length > 0 && (
+              <ul>
+                {t.nodeIds.slice(0, 8).map((id) => (
+                  <li key={id}>
+                    <b>{nodeLabel(byId.get(id), id)}</b>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function Logo({ small = false }: { small?: boolean }) {
   return (
@@ -1255,6 +1327,9 @@ function IncidentPanel({
                     ))}
                   </div>
                 )}
+                {event.traces?.length > 0 && (
+                  <TraceList traces={event.traces} nodes={state.nodes} simulated={event.simulated} />
+                )}
               </div>
             </div>
           ))}
@@ -1318,6 +1393,8 @@ function IncidentPanel({
                 {[
                   "What happened last time?",
                   "Why not restart the service?",
+                  "Who should I page?",
+                  "What else breaks if the database goes down?",
                 ].map((q) => (
                   <button key={q} onClick={() => setText(q)}>
                     {q}
@@ -1334,11 +1411,15 @@ function IncidentPanel({
                 <time>{timestamp(m.createdAt)}</time>
               </strong>
               <p>{m.content}</p>
-              {m.memoryIds?.length > 0 && (
-                <small>
-                  <BrainCircuit size={12} /> Based on {m.memoryIds.length}{" "}
-                  linked memories
-                </small>
+              {m.traces?.length > 0 ? (
+                <TraceList traces={m.traces} nodes={state.nodes} />
+              ) : (
+                m.memoryIds?.length > 0 && (
+                  <small>
+                    <BrainCircuit size={12} /> Based on {m.memoryIds.length}{" "}
+                    linked memories
+                  </small>
+                )
               )}
             </div>
           ))}
@@ -1406,19 +1487,58 @@ function IncidentPanel({
           )}
         </div>
       )}
+      {incident.investigation && incident.status !== "resolved" && (
+        <div className="plan-review investigation-card">
+          <div className="plan-label">
+            <Waypoints size={15} />
+            <strong>Root cause: {incident.investigation.rootCauseService}</strong>
+            <span>
+              {incident.investigation.toolCalls} graph queries ·{" "}
+              {incident.investigation.ruledOut?.length ?? 0} ruled out ·{" "}
+              {incident.investigation.impactedServiceIds?.length ?? 0} downstream
+            </span>
+          </div>
+          {incident.investigation.escalateTo && (
+            <div className="plan-details">
+              <span>
+                Escalate to{" "}
+                <strong>
+                  {nodeLabel(
+                    state.nodes.find((n) => n.id === incident.investigation.escalateTo),
+                    incident.investigation.escalateTo,
+                  )}
+                </strong>
+              </span>
+            </div>
+          )}
+        </div>
+      )}
       {incident.plan && incident.status !== "resolved" && (
         <div className="plan-review">
           <div className="plan-label">
             <GitBranch size={15} />
             <strong>Proposed recovery</strong>
-            <span>From shared procedural memory</span>
+            <span>
+              {nodeLabel(state.nodes.find((n) => n.id === incident.plan.procedureId), incident.plan.procedureId)}
+            </span>
           </div>
           <div className="plan-details">
             <code>{incident.plan.database}</code>
             <ArrowRight size={13} />
             <span>
-              Pool capacity <strong>{incident.plan.targetPool}</strong>
+              {incident.plan.action === "increase-pool" ? (
+                <>
+                  Pool capacity <strong>{incident.plan.targetPool}</strong>
+                </>
+              ) : (
+                <strong>{incident.plan.action}</strong>
+              )}
             </span>
+            {incident.plan.forbidden?.length > 0 && (
+              <span className="plan-forbidden">
+                <TriangleAlert size={13} /> Will not {incident.plan.forbidden.join(", ")}
+              </span>
+            )}
             <span className="plan-check">
               <ShieldCheck size={13} /> Verify before closing
             </span>
@@ -1816,41 +1936,104 @@ function MemoryGraph({
   memories: Entity[];
   select: (m: Entity) => void;
 }) {
-  const items = memories.slice(0, 9);
-  const graphHeight = Math.max(480, Math.ceil(items.length / 2) * 132 + 40);
-  const cx = 590,
-    cy = graphHeight / 2;
-  const positions = items.map((m, i) => {
-    const left = i % 2 === 0;
-    const rows = left
-      ? Math.ceil(items.length / 2)
-      : Math.floor(items.length / 2);
-    return {
-      m,
-      x: left ? 200 : 980,
-      y: (graphHeight - rows * 132) / 2 + 66 + Math.floor(i / 2) * 132,
-    };
-  });
-  const labelLines = (title: string) => {
-    const words = title.split(/\s+/);
-    const lines = [""];
-    for (const word of words) {
-      const current = lines.length - 1;
-      if (lines[current] && `${lines[current]} ${word}`.length > 30) {
-        lines.push(word);
-      } else {
-        lines[current] = `${lines[current]} ${word}`.trim();
+  const [focus, setFocus] = useState<string | null>(null);
+  const [showWorkflow, setShowWorkflow] = useState(false);
+  const byId = new Map(state.nodes.map((n) => [n.id, n]));
+  const visibleMemory = new Set(memories.map((m) => m.id));
+  const WORKFLOW = new Set(["event", "task", "message"]);
+  const nodes = state.nodes.filter(
+    (n) =>
+      !WORKFLOW.has(n.kind) &&
+      (n.kind !== "memory" || visibleMemory.has(n.id)) &&
+      (n.kind !== "incident" || n.status === "resolved" || showWorkflow),
+  );
+  const shown = new Set(nodes.map((n) => n.id));
+  const edges = state.edges.filter(
+    (e) => shown.has(e.from) && shown.has(e.to) && !["HAS_EVENT", "HAS_TASK", "HAS_MESSAGE"].includes(e.relation),
+  );
+
+  // Highlight: union of every trace path on the most recent finding/plan events,
+  // or the neighbourhood of a focused node.
+  const latest = [...state.nodes]
+    .filter((n) => n.kind === "event" && n.traces?.length)
+    .sort((a, b) => b.createdAt - a.createdAt)[0];
+  const hot = new Set<string>();
+  const hotEdges = new Set<string>();
+  if (focus) {
+    hot.add(focus);
+    for (const e of edges)
+      if (e.from === focus || e.to === focus) {
+        hot.add(e.from);
+        hot.add(e.to);
+        hotEdges.add(`${e.from}|${e.relation}|${e.to}`);
+      }
+  } else if (latest) {
+    for (const t of latest.traces as ToolTrace[]) {
+      for (const id of t.nodeIds) hot.add(id);
+      for (const p of t.paths ?? []) {
+        hot.add(p.from);
+        hot.add(p.to);
+        hotEdges.add(`${p.from}|${p.relation.replace(" (shared)", "")}|${p.to}`);
       }
     }
-    return lines
-      .slice(0, 2)
-      .map((line, i) =>
-        line.length > 30 || (i === 1 && lines.length > 2)
-          ? `${line.slice(0, 29)}…`
-          : line,
-      );
+    if (latest.incidentId) hot.add(latest.incidentId);
+  }
+
+  // Layered layout by kind: people/teams left, topology centre, incidents/memory/decisions right.
+  const columns: Array<{ kinds: string[]; x: number; title: string }> = [
+    { kinds: ["person"], x: 90, title: "PEOPLE" },
+    { kinds: ["team"], x: 300, title: "TEAMS" },
+    { kinds: ["service"], x: 560, title: "SERVICES" },
+    { kinds: ["incident"], x: 830, title: "INCIDENTS" },
+    { kinds: ["memory"], x: 1080, title: "MEMORY" },
+    { kinds: ["decision"], x: 1330, title: "DECISIONS" },
+  ];
+  const ROW = 44;
+  const positions = new Map<string, { x: number; y: number }>();
+  let height = 120;
+  for (const col of columns) {
+    const items = nodes
+      .filter((n) => col.kinds.includes(n.kind))
+      .sort((a, b) => {
+        if (a.kind === "service") {
+          // keep call order roughly top to bottom: edge, core, data
+          const rank = (n: Entity) => (n.tier === "edge" ? 0 : n.type === "database" || n.type === "index" ? 3 : n.type === "external" ? 4 : 1);
+          return rank(a) - rank(b) || a.name.localeCompare(b.name);
+        }
+        if (a.kind === "memory") return (a.serviceId ?? "").localeCompare(b.serviceId ?? "") || a.createdAt - b.createdAt;
+        return (a.name ?? a.number ?? a.title ?? "").localeCompare(b.name ?? b.number ?? b.title ?? "");
+      });
+    items.forEach((n, i) => positions.set(n.id, { x: col.x, y: 70 + i * ROW }));
+    height = Math.max(height, 70 + items.length * ROW + 40);
+  }
+  const width = 1480;
+  const color = (n: Entity) =>
+    n.kind === "service"
+      ? n.type === "database" || n.type === "index"
+        ? "#204e3e"
+        : "#3b7a5c"
+      : n.kind === "person"
+        ? "#5675ca"
+        : n.kind === "team"
+          ? "#7b8fcf"
+          : n.kind === "incident"
+            ? n.status === "resolved"
+              ? "#c39149"
+              : "#d2553a"
+            : n.kind === "decision"
+              ? n.status === "rejected"
+                ? "#b65a4a"
+                : "#8a7a4a"
+              : n.category === "semantic"
+                ? "#a088b6"
+                : n.category === "episodic"
+                  ? "#d19d64"
+                  : "#6c9b7e";
+  const label = (n: Entity) => {
+    const text = n.name ?? n.number ?? n.title ?? n.id;
+    return text.length > 28 ? `${text.slice(0, 27)}…` : text;
   };
-  const service = state.nodes.find((n) => n.id === "service-checkout");
+  const dim = hot.size > 0;
   return (
     <div className="graph-canvas">
       <div className="graph-title">
@@ -1858,169 +2041,116 @@ function MemoryGraph({
           <GitBranch size={14} /> {state.workspace.name}
         </span>
         <small>
-          {memories.length} memories · {state.edges.length} workspace
-          relationships
+          {nodes.length} nodes · {edges.length} relationships
+          {latest && !focus ? ` · highlighting ${latest.title}` : ""}
+          {focus ? ` · ${label(byId.get(focus)!)}` : ""}
         </small>
+        {focus && (
+          <button className="link" onClick={() => setFocus(null)}>
+            Clear
+          </button>
+        )}
       </div>
-      <div
-        className="graph-viewport"
-        role="region"
-        aria-label="Scrollable memory graph"
-        tabIndex={0}
-      >
-        <svg
-          viewBox={`0 0 1180 ${graphHeight}`}
-          role="group"
-          aria-label="Service memory graph. Select a memory node to inspect its source."
-        >
+      <div className="graph-viewport" role="region" aria-label="Scrollable workspace graph" tabIndex={0}>
+        <svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Workspace knowledge graph">
           <defs>
-            <pattern
-              id="dots"
-              x="0"
-              y="0"
-              width="18"
-              height="18"
-              patternUnits="userSpaceOnUse"
-            >
+            <pattern id="dots" x="0" y="0" width="18" height="18" patternUnits="userSpaceOnUse">
               <circle cx="1" cy="1" r=".8" fill="#d6ddd6" />
             </pattern>
-            <filter id="graph-shadow">
-              <feDropShadow
-                dx="0"
-                dy="3"
-                stdDeviation="5"
-                floodColor="#183f34"
-                floodOpacity=".07"
-              />
-            </filter>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#9fb3a6" />
+            </marker>
+            <marker id="arrow-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#d2553a" />
+            </marker>
           </defs>
-          <rect width="1180" height={graphHeight} fill="url(#dots)" />
-          <circle
-            cx={cx}
-            cy={cy}
-            r="142"
-            fill="none"
-            stroke="#e9ede6"
-            strokeDasharray="4 6"
-          />
-          <circle cx={cx} cy={cy} r="245" fill="none" stroke="#e9ede6" />
-          {positions.map(({ m, x, y }) => (
-            <g key={`line-${m.id}`}>
+          <rect width={width} height={height} fill="url(#dots)" />
+          {columns.map((c) => (
+            <text key={c.title} x={c.x} y={40} textAnchor="middle" className="graph-category">
+              {c.title}
+            </text>
+          ))}
+          {edges.map((e, i) => {
+            const a = positions.get(e.from);
+            const b = positions.get(e.to);
+            if (!a || !b) return null;
+            const isHot = hotEdges.has(`${e.from}|${e.relation}|${e.to}`);
+            const dx = b.x - a.x;
+            const sameCol = Math.abs(dx) < 1;
+            const x1 = a.x + (dx > 0 ? 70 : dx < 0 ? -70 : 0);
+            const x2 = b.x + (dx > 0 ? -74 : dx < 0 ? 74 : 0);
+            const d = sameCol
+              ? `M${a.x + 70},${a.y} C${a.x + 130},${a.y} ${b.x + 130},${b.y} ${b.x + 70},${b.y}`
+              : `M${x1},${a.y} C${(x1 + x2) / 2},${a.y} ${(x1 + x2) / 2},${b.y} ${x2},${b.y}`;
+            return (
               <path
-                d={`M${cx},${cy} C${(cx + x) / 2},${cy} ${(cx + x) / 2},${y} ${x},${y}`}
-                stroke={m.status === "superseded" ? "#cebda9" : "#b7cbbd"}
-                strokeWidth="1.4"
+                key={i}
+                d={d}
                 fill="none"
-                strokeDasharray={m.status === "superseded" ? "4 4" : undefined}
-              />
-              <circle
-                cx={(cx + x) / 2 + 12}
-                cy={(cy + y) / 2 - 5}
-                r="3"
-                fill="#8fad96"
-              />
-            </g>
-          ))}
-          <g filter="url(#graph-shadow)">
-            <rect
-              x={cx - 120}
-              y={cy - 55}
-              width="240"
-              height="110"
-              rx="16"
-              fill="#204e3e"
-            />
-            <text
-              x={cx}
-              y={cy - 23}
-              textAnchor="middle"
-              fill="#d0e2cd"
-              fontSize="12"
-              letterSpacing="1.2"
-            >
-              SHARED SERVICE
-            </text>
-            <text
-              x={cx}
-              y={cy + 6}
-              textAnchor="middle"
-              fill="#f2f6e9"
-              fontSize="20"
-              fontWeight="600"
-            >
-              {service?.name}
-            </text>
-            <text
-              x={cx}
-              y={cy + 31}
-              textAnchor="middle"
-              fill="#d0e2cd"
-              fontSize="13"
-            >
-              Shared service context
-            </text>
-          </g>
-          {positions.map(({ m, x, y }) => (
-            <g
-              className="graph-node"
-              key={m.id}
-              role="button"
-              tabIndex={0}
-              aria-label={m.title}
-              onClick={() => select(m)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  select(m);
-                }
-              }}
-            >
-              <title>{m.title}</title>
-              <rect
-                x={x - 150}
-                y={y - 49}
-                width="300"
-                height="98"
-                rx="13"
-                fill="#fff"
-                stroke={m.status === "superseded" ? "#c8bda9" : "#dce3db"}
-                filter="url(#graph-shadow)"
-              />
-              <circle
-                cx={x - 128}
-                cy={y - 25}
-                r="4"
-                fill={
-                  m.category === "semantic"
-                    ? "#a088b6"
-                    : m.category === "episodic"
-                      ? "#d19d64"
-                      : "#6c9b7e"
-                }
-              />
-              <text x={x - 116} y={y - 21} className="graph-category">
-                {m.category.toUpperCase()}{" "}
-                {m.status === "superseded" ? "· SUPERSEDED" : ""}
-              </text>
-              <text x={x - 132} y={y + 5} className="graph-node-title">
-                {labelLines(m.title).map((line, i) => (
-                  <tspan key={i} x={x - 132} dy={i === 0 ? 0 : 23}>
-                    {line}
-                  </tspan>
-                ))}
-              </text>
-            </g>
-          ))}
+                stroke={isHot ? "#d2553a" : "#b7cbbd"}
+                strokeWidth={isHot ? 2.2 : 1}
+                opacity={dim && !isHot ? 0.18 : 1}
+                markerEnd={isHot ? "url(#arrow-hot)" : "url(#arrow)"}
+              >
+                <title>
+                  {label(byId.get(e.from)!)} {e.relation} {label(byId.get(e.to)!)}
+                </title>
+              </path>
+            );
+          })}
+          {nodes.map((n) => {
+            const p = positions.get(n.id);
+            if (!p) return null;
+            const isHot = hot.has(n.id);
+            const superseded = n.status === "superseded";
+            return (
+              <g
+                className="graph-node"
+                key={n.id}
+                role="button"
+                tabIndex={0}
+                aria-label={label(n)}
+                opacity={dim && !isHot ? 0.35 : 1}
+                onClick={() => (n.kind === "memory" ? select(n) : setFocus(focus === n.id ? null : n.id))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    n.kind === "memory" ? select(n) : setFocus(n.id);
+                  }
+                }}
+              >
+                <title>
+                  {n.kind}: {n.name ?? n.number ?? n.title}
+                </title>
+                <rect
+                  x={p.x - 70}
+                  y={p.y - 16}
+                  width="140"
+                  height="32"
+                  rx="9"
+                  fill="#fff"
+                  stroke={isHot ? "#d2553a" : superseded ? "#c8bda9" : "#dce3db"}
+                  strokeWidth={isHot ? 2 : 1}
+                  strokeDasharray={superseded ? "4 3" : undefined}
+                />
+                <circle cx={p.x - 56} cy={p.y} r="4.5" fill={color(n)} />
+                <text x={p.x - 46} y={p.y + 4} fontSize="11.5" fill="#1f2d27">
+                  {label(n)}
+                </text>
+              </g>
+            );
+          })}
         </svg>
       </div>
-      {!items.length && (
-        <div className="graph-empty">No memories match this filter.</div>
-      )}
       <div className="graph-instruction">
         <span>
           <LockKeyhole size={12} /> Tenant-isolated graph
         </span>
-        <span>Scroll to explore · select a memory to see its source</span>
+        <span>Select a service, person, or incident to see its connections · memories open their source</span>
+        <label className="graph-toggle">
+          <input type="checkbox" checked={showWorkflow} onChange={(e) => setShowWorkflow(e.target.checked)} />
+          <span>Include open incidents</span>
+        </label>
       </div>
     </div>
   );
@@ -2372,6 +2502,45 @@ function SettingsPage({
   );
 }
 
+const SCENARIO_OPTIONS = [
+  {
+    id: "pool",
+    icon: Activity,
+    name: "Connection exhaustion",
+    hint: "Pool saturated. Recall the fix that worked.",
+    title: "Checkout API is returning elevated errors",
+    description:
+      "Error rate crossed 10% after a traffic spike. Investigate the connection pool and recall any similar incidents.",
+  },
+  {
+    id: "worker",
+    icon: Workflow,
+    name: "Hidden neighbour",
+    hint: "Same symptom, different culprit two hops away.",
+    title: "Checkout errors while a background queue grows",
+    description:
+      "Pool is saturated again, but the worker queue is also climbing. Atlas must decide whether this is the database or something sharing it.",
+  },
+  {
+    id: "cache",
+    icon: Zap,
+    name: "Cache eviction",
+    hint: "Users logged out. The database is fine.",
+    title: "Customers are being logged out mid-checkout",
+    description:
+      "Cache miss rate spiked and evicted_keys is climbing. No database signals. Find the right runbook.",
+  },
+  {
+    id: "migration",
+    icon: GitCompareArrows,
+    name: "Memory correction",
+    hint: "New evidence invalidates the plan.",
+    title: "Checkout failures after a database migration",
+    description:
+      "Investigate the failing service. At the approval checkpoint, introduce migration evidence to see the team correct stale memory and rebuild its plan.",
+  },
+];
+
 function NewIncidentModal({
   close,
   create,
@@ -2407,35 +2576,23 @@ function NewIncidentModal({
       >
         <label>Choose a scenario</label>
         <div className="scenario-options">
-          <button
-            type="button"
-            className={scenario === "pool" ? "selected" : ""}
-            onClick={() => {
-              setScenario("pool");
-              setTitle("Checkout API is returning elevated errors");
-            }}
-          >
-            <Activity size={20} />
-            <strong>Connection exhaustion</strong>
-            <small>Recall a previous fix and recover.</small>
-            <span className="radio-circle" />
-          </button>
-          <button
-            type="button"
-            className={scenario === "migration" ? "selected" : ""}
-            onClick={() => {
-              setScenario("migration");
-              setTitle("Checkout failures after a database migration");
-              setDescription(
-                "Investigate the failing service. At the approval checkpoint, introduce migration evidence to see the team correct stale memory and rebuild its plan.",
-              );
-            }}
-          >
-            <GitCompareArrows size={20} />
-            <strong>Memory correction</strong>
-            <small>New evidence changes the plan.</small>
-            <span className="radio-circle" />
-          </button>
+          {SCENARIO_OPTIONS.map((s) => (
+            <button
+              type="button"
+              key={s.id}
+              className={scenario === s.id ? "selected" : ""}
+              onClick={() => {
+                setScenario(s.id);
+                setTitle(s.title);
+                setDescription(s.description);
+              }}
+            >
+              <s.icon size={20} />
+              <strong>{s.name}</strong>
+              <small>{s.hint}</small>
+              <span className="radio-circle" />
+            </button>
+          ))}
         </div>
         <label htmlFor="incident-title">Incident title</label>
         <input

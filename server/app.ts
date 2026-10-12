@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { Store } from "./store";
-import { Engine } from "./engine";
+import { Engine, SCENARIOS } from "./engine";
 import { WORKSPACES } from "./seed";
 
 export function createApp(
@@ -154,10 +154,41 @@ export function createApp(
         title: z.string().trim().min(5).max(120),
         description: z.string().trim().max(2000).default(""),
         severity: z.enum(["P1", "P2", "P3"]).default("P1"),
-        scenario: z.enum(["pool", "migration"]).default("pool"),
+        scenario: z.enum(["pool", "worker", "cache", "migration"]).default("pool"),
       })
       .parse(req.body);
     res.status(201).json(await engine.create(res.locals.session.tenant, data));
+  });
+  app.get("/api/scenarios", (_req, res) => {
+    res.json(
+      Object.entries(SCENARIOS).map(([id, s]) => ({ id, ...s })),
+    );
+  });
+  // Read-only graph questions, the same ones the agents use.
+  const nodeId = z.string().regex(/^[a-z0-9:_-]{1,80}$/i);
+  app.get("/api/graph/:tool/:serviceId", async (req, res) => {
+    const tool = z
+      .enum(["suspects", "blast_radius", "similar_incidents", "who_knows", "decisions"])
+      .parse(req.params.tool);
+    const serviceId = nodeId.parse(req.params.serviceId);
+    const tenant = res.locals.session.tenant;
+    const g = engine.graph;
+    const result =
+      tool === "suspects"
+        ? await g.suspects(tenant, serviceId)
+        : tool === "blast_radius"
+          ? await g.blastRadius(tenant, serviceId)
+          : tool === "similar_incidents"
+            ? await g.similarIncidents(tenant, serviceId)
+            : tool === "who_knows"
+              ? await g.whoKnows(tenant, serviceId)
+              : await g.decisions(tenant, serviceId);
+    res.json(result);
+  });
+  app.get("/api/graph/path", async (req, res) => {
+    const from = nodeId.parse(req.query.from);
+    const to = nodeId.parse(req.query.to);
+    res.json((await engine.graph.path(res.locals.session.tenant, from, to)) ?? null);
   });
   app.post("/api/incidents/:id/action", async (req, res) => {
     const action = z

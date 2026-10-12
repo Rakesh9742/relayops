@@ -101,22 +101,43 @@ const pathText = (p: PathStep[]) =>
 
 export class ToolRunner {
   traces: ToolTrace[] = [];
-  constructor(private graph: GraphTools, private tenant: string) {}
+  constructor(private graph: GraphTools, private tenant: string, private liveSignals: string[] = []) {}
+  /** Which of the live signal names a memory's signature explains. */
+  private explains(m: Entity) {
+    const expected: string[] = m.signals ?? (m.signal ? [m.signal] : []);
+    const live = this.liveSignals.map((s) => s.split("=")[0].trim());
+    return { matched: expected.filter((s) => live.includes(s)), unmatched: expected.filter((s) => !live.includes(s)) };
+  }
   private record(call: ToolCall, summary: string, nodeIds: string[], paths?: PathStep[]) {
     this.traces.push({ tool: call.name, args: call.args, summary, nodeIds: [...new Set(nodeIds)], paths });
   }
   async execute(call: ToolCall): Promise<string> {
-    const sid = String(call.args.serviceId ?? "");
+    const raw = String(call.args.serviceId ?? "");
+    const sid = raw ? ((await this.graph.resolve(this.tenant, raw)) ?? raw) : raw;
+    if (raw && sid === raw && call.name !== "path" && !(await this.graph.resolve(this.tenant, raw)))
+      return `Unknown service "${raw}". Use a node id such as service-db, or an exact service name.`;
     switch (call.name) {
       case "suspects": {
         const hits = await this.graph.suspects(this.tenant, sid);
-        const out = hits.map((h) => ({
-          service: brief(h.node),
-          hops: h.depth,
-          via: pathText(h.path),
-          rootCauseOf: h.rootCauseOf.map(brief),
-          memories: h.memories.map(brief),
-        }));
+        const out = hits.map((h) => {
+          const matched = new Set<string>();
+          const unmatched = new Set<string>();
+          for (const m of h.memories) {
+            const e = this.explains(m);
+            e.matched.forEach((s) => matched.add(s));
+            e.unmatched.forEach((s) => unmatched.add(s));
+          }
+          return {
+            service: brief(h.node),
+            hops: h.depth,
+            via: pathText(h.path),
+            rootCauseOf: h.rootCauseOf.map(brief),
+            memories: h.memories.map(brief),
+            ...(this.liveSignals.length
+              ? { liveSignalsExplained: [...matched], expectedSignalsNotSeen: [...unmatched].filter((s) => !matched.has(s)) }
+              : {}),
+          };
+        });
         this.record(
           call,
           `${hits.length} upstream services; ${hits.filter((h) => h.rootCauseOf.length).length} were root causes before`,
@@ -174,7 +195,9 @@ export class ToolRunner {
         return JSON.stringify(list.map(brief));
       }
       case "path": {
-        const p = await this.graph.path(this.tenant, String(call.args.from), String(call.args.to));
+        const from = (await this.graph.resolve(this.tenant, String(call.args.from))) ?? String(call.args.from);
+        const to = (await this.graph.resolve(this.tenant, String(call.args.to))) ?? String(call.args.to);
+        const p = await this.graph.path(this.tenant, from, to);
         this.record(call, p ? `${p.length} hops` : "no path", p ? [p[0]?.from, ...p.map((s) => s.to)].filter(Boolean) : [], p);
         return p ? pathText(p) : "No path within 4 hops.";
       }
@@ -307,11 +330,11 @@ export async function investigate(
   tenant: string,
   incident: Entity,
 ): Promise<Investigation> {
-  const runner = new ToolRunner(graph, tenant);
+  const runner = new ToolRunner(graph, tenant, incident.signals ?? []);
   if (client.info.provider === "simulation") return simulatedInvestigation(runner, incident);
   const run = await client.runTools(
     SYSTEM.replace("{agent}", "Atlas, the investigator") +
-      ` Start with suspects and similar_incidents on the affected service. Check blast_radius for impact. Use who_knows on the root cause service to suggest an escalation. Then call finish.`,
+      ` Method: 1) Call suspects on the affected service. 2) Compare the incident's live signals against each suspect's memory "signals"/"signal" fields; a suspect whose memory explains MORE of the live signals is more likely than one that explains fewer, even if it is further away. The nearest service is not automatically the cause. 3) Call similar_incidents to confirm with history. 4) Call blast_radius on your chosen root cause. 5) Call who_knows on the root cause to suggest an escalation. Then call finish. In the summary, state which live signal(s) decided it and which nearer suspect you ruled out and why.`,
     JSON.stringify({
       incident: { id: incident.id, number: incident.number, title: incident.title, description: incident.description, severity: incident.severity, affectedServiceId: incident.serviceId, affectedService: incident.service, signals: incident.signals },
     }),
@@ -343,7 +366,7 @@ export async function plan(
   if (client.info.provider === "simulation") return simulatedPlan(runner, incident, investigation);
   const run = await client.runTools(
     SYSTEM.replace("{agent}", "Sage, the resolver") +
-      ` Atlas identified the root cause. Fetch procedural memory on the root cause service and semantic memory on the affected service. Check decisions for forbidden actions and constraints. Pick exactly one procedure and one current fact. Then call finish.`,
+      ` Atlas identified the root cause. 1) Call memories(rootCauseServiceId, "procedural") and pick the procedure. 2) Call memories(rootCauseServiceId, "semantic") for the fact describing the current target (the one with a "database" field if present); fall back to the affected service's semantic memory only if the root cause has none. 3) Call decisions on the affected service: a decision with status "rejected" and a "forbids" field names an action you must not propose; list it in forbidden exactly as given. 4) Call finish with one procedureId and one factId.`,
     JSON.stringify({
       incident: { id: incident.id, number: incident.number, title: incident.title, affectedServiceId: incident.serviceId, sandbox: incident.sandbox },
       investigation: { summary: investigation.summary, rootCauseServiceId: investigation.rootCauseServiceId, rootCauseMemoryIds: investigation.rootCauseMemoryIds },
@@ -378,9 +401,20 @@ export async function answer(
   if (client.info.provider === "simulation") return { text: fallback, traces: [] };
   const run = await client.runTools(
     SYSTEM.replace("{agent}", "Atlas") +
-      ` Answer the operator's question. Use tools when the answer depends on relationships (who, what depends on what, what happened before). Reply in under 100 words with ids cited. Do not call finish; just answer in text.`,
+      ` Answer the operator's question. Use tools when the answer depends on relationships (who, what depends on what, what happened before). Tools accept node ids (service-db) or exact service names (orders-db). Reply in under 100 words with ids cited. Do not call finish; just answer in text.`,
     JSON.stringify({
-      incident: { id: incident.id, number: incident.number, title: incident.title, status: incident.status, affectedServiceId: incident.serviceId, plan: incident.plan ?? null, investigation: incident.investigation?.summary ?? null },
+      incident: {
+        id: incident.id,
+        number: incident.number,
+        title: incident.title,
+        status: incident.status,
+        affectedServiceId: incident.serviceId,
+        affectedService: incident.service,
+        rootCauseServiceId: incident.investigation?.rootCauseServiceId ?? null,
+        rootCauseService: incident.investigation?.rootCauseService ?? null,
+        plan: incident.plan ?? null,
+        investigation: incident.investigation?.summary ?? null,
+      },
       conversation,
       question,
     }),
