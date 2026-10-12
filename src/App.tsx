@@ -154,7 +154,9 @@ function TraceList({
                     <b>{nodeLabel(byId.get(p.to), p.to)}</b>
                   </li>
                 ))}
-                {(t.paths?.length ?? 0) > 8 && <li className="more">+{t.paths!.length - 8} more</li>}
+                {(t.paths?.length ?? 0) > 8 && (
+                  <li className="more">+{t.paths!.length - 8} more</li>
+                )}
               </ul>
             )}
             {open === i && paths.length === 0 && t.nodeIds.length > 0 && (
@@ -1328,7 +1330,11 @@ function IncidentPanel({
                   </div>
                 )}
                 {event.traces?.length > 0 && (
-                  <TraceList traces={event.traces} nodes={state.nodes} simulated={event.simulated} />
+                  <TraceList
+                    traces={event.traces}
+                    nodes={state.nodes}
+                    simulated={event.simulated}
+                  />
                 )}
               </div>
             </div>
@@ -1491,11 +1497,14 @@ function IncidentPanel({
         <div className="plan-review investigation-card">
           <div className="plan-label">
             <Waypoints size={15} />
-            <strong>Root cause: {incident.investigation.rootCauseService}</strong>
+            <strong>
+              Root cause: {incident.investigation.rootCauseService}
+            </strong>
             <span>
               {incident.investigation.toolCalls} graph queries ·{" "}
               {incident.investigation.ruledOut?.length ?? 0} ruled out ·{" "}
-              {incident.investigation.impactedServiceIds?.length ?? 0} downstream
+              {incident.investigation.impactedServiceIds?.length ?? 0}{" "}
+              downstream
             </span>
           </div>
           {incident.investigation.escalateTo && (
@@ -1504,7 +1513,9 @@ function IncidentPanel({
                 Escalate to{" "}
                 <strong>
                   {nodeLabel(
-                    state.nodes.find((n) => n.id === incident.investigation.escalateTo),
+                    state.nodes.find(
+                      (n) => n.id === incident.investigation.escalateTo,
+                    ),
                     incident.investigation.escalateTo,
                   )}
                 </strong>
@@ -1519,7 +1530,10 @@ function IncidentPanel({
             <GitBranch size={15} />
             <strong>Proposed recovery</strong>
             <span>
-              {nodeLabel(state.nodes.find((n) => n.id === incident.plan.procedureId), incident.plan.procedureId)}
+              {nodeLabel(
+                state.nodes.find((n) => n.id === incident.plan.procedureId),
+                incident.plan.procedureId,
+              )}
             </span>
           </div>
           <div className="plan-details">
@@ -1536,7 +1550,8 @@ function IncidentPanel({
             </span>
             {incident.plan.forbidden?.length > 0 && (
               <span className="plan-forbidden">
-                <TriangleAlert size={13} /> Will not {incident.plan.forbidden.join(", ")}
+                <TriangleAlert size={13} /> Will not{" "}
+                {incident.plan.forbidden.join(", ")}
               </span>
             )}
             <span className="plan-check">
@@ -1949,7 +1964,10 @@ function MemoryGraph({
   );
   const shown = new Set(nodes.map((n) => n.id));
   const edges = state.edges.filter(
-    (e) => shown.has(e.from) && shown.has(e.to) && !["HAS_EVENT", "HAS_TASK", "HAS_MESSAGE"].includes(e.relation),
+    (e) =>
+      shown.has(e.from) &&
+      shown.has(e.to) &&
+      !["HAS_EVENT", "HAS_TASK", "HAS_MESSAGE"].includes(e.relation),
   );
 
   // Highlight: union of every trace path on the most recent finding/plan events,
@@ -1973,7 +1991,9 @@ function MemoryGraph({
       for (const p of t.paths ?? []) {
         hot.add(p.from);
         hot.add(p.to);
-        hotEdges.add(`${p.from}|${p.relation.replace(" (shared)", "")}|${p.to}`);
+        hotEdges.add(
+          `${p.from}|${p.relation.replace(" (shared)", "")}|${p.to}`,
+        );
       }
     }
     if (latest.incidentId) hot.add(latest.incidentId);
@@ -1997,11 +2017,24 @@ function MemoryGraph({
       .sort((a, b) => {
         if (a.kind === "service") {
           // keep call order roughly top to bottom: edge, core, data
-          const rank = (n: Entity) => (n.tier === "edge" ? 0 : n.type === "database" || n.type === "index" ? 3 : n.type === "external" ? 4 : 1);
+          const rank = (n: Entity) =>
+            n.tier === "edge"
+              ? 0
+              : n.type === "database" || n.type === "index"
+                ? 3
+                : n.type === "external"
+                  ? 4
+                  : 1;
           return rank(a) - rank(b) || a.name.localeCompare(b.name);
         }
-        if (a.kind === "memory") return (a.serviceId ?? "").localeCompare(b.serviceId ?? "") || a.createdAt - b.createdAt;
-        return (a.name ?? a.number ?? a.title ?? "").localeCompare(b.name ?? b.number ?? b.title ?? "");
+        if (a.kind === "memory")
+          return (
+            (a.serviceId ?? "").localeCompare(b.serviceId ?? "") ||
+            a.createdAt - b.createdAt
+          );
+        return (a.name ?? a.number ?? a.title ?? "").localeCompare(
+          b.name ?? b.number ?? b.title ?? "",
+        );
       });
     items.forEach((n, i) => positions.set(n.id, { x: col.x, y: 70 + i * ROW }));
     height = Math.max(height, 70 + items.length * ROW + 40);
@@ -2051,22 +2084,60 @@ function MemoryGraph({
           </button>
         )}
       </div>
-      <div className="graph-viewport" role="region" aria-label="Scrollable workspace graph" tabIndex={0}>
-        <svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Workspace knowledge graph">
+      <div
+        className="graph-viewport"
+        role="region"
+        aria-label="Scrollable workspace graph"
+        tabIndex={0}
+      >
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          role="group"
+          aria-label="Workspace knowledge graph"
+        >
           <defs>
-            <pattern id="dots" x="0" y="0" width="18" height="18" patternUnits="userSpaceOnUse">
+            <pattern
+              id="dots"
+              x="0"
+              y="0"
+              width="18"
+              height="18"
+              patternUnits="userSpaceOnUse"
+            >
               <circle cx="1" cy="1" r=".8" fill="#d6ddd6" />
             </pattern>
-            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <marker
+              id="arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
               <path d="M0,0 L10,5 L0,10 z" fill="#9fb3a6" />
             </marker>
-            <marker id="arrow-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <marker
+              id="arrow-hot"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
               <path d="M0,0 L10,5 L0,10 z" fill="#d2553a" />
             </marker>
           </defs>
           <rect width={width} height={height} fill="url(#dots)" />
           {columns.map((c) => (
-            <text key={c.title} x={c.x} y={40} textAnchor="middle" className="graph-category">
+            <text
+              key={c.title}
+              x={c.x}
+              y={40}
+              textAnchor="middle"
+              className="graph-category"
+            >
               {c.title}
             </text>
           ))}
@@ -2093,7 +2164,8 @@ function MemoryGraph({
                 markerEnd={isHot ? "url(#arrow-hot)" : "url(#arrow)"}
               >
                 <title>
-                  {label(byId.get(e.from)!)} {e.relation} {label(byId.get(e.to)!)}
+                  {label(byId.get(e.from)!)} {e.relation}{" "}
+                  {label(byId.get(e.to)!)}
                 </title>
               </path>
             );
@@ -2111,7 +2183,11 @@ function MemoryGraph({
                 tabIndex={0}
                 aria-label={label(n)}
                 opacity={dim && !isHot ? 0.35 : 1}
-                onClick={() => (n.kind === "memory" ? select(n) : setFocus(focus === n.id ? null : n.id))}
+                onClick={() =>
+                  n.kind === "memory"
+                    ? select(n)
+                    : setFocus(focus === n.id ? null : n.id)
+                }
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -2129,7 +2205,9 @@ function MemoryGraph({
                   height="32"
                   rx="9"
                   fill="#fff"
-                  stroke={isHot ? "#d2553a" : superseded ? "#c8bda9" : "#dce3db"}
+                  stroke={
+                    isHot ? "#d2553a" : superseded ? "#c8bda9" : "#dce3db"
+                  }
                   strokeWidth={isHot ? 2 : 1}
                   strokeDasharray={superseded ? "4 3" : undefined}
                 />
@@ -2146,9 +2224,16 @@ function MemoryGraph({
         <span>
           <LockKeyhole size={12} /> Tenant-isolated graph
         </span>
-        <span>Select a service, person, or incident to see its connections · memories open their source</span>
+        <span>
+          Select a service, person, or incident to see its connections ·
+          memories open their source
+        </span>
         <label className="graph-toggle">
-          <input type="checkbox" checked={showWorkflow} onChange={(e) => setShowWorkflow(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={showWorkflow}
+            onChange={(e) => setShowWorkflow(e.target.checked)}
+          />
           <span>Include open incidents</span>
         </label>
       </div>

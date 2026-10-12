@@ -35,10 +35,16 @@ test("blast radius follows reverse dependencies to the edge", async () => {
   try {
     const hits = await graph.blastRadius("acme", "service-db");
     const ids = hits.map((h) => h.node.id);
-    assert.deepEqual(ids.slice(0, 2).sort(), ["service-checkout", "service-worker"]);
+    assert.deepEqual(ids.slice(0, 2).sort(), [
+      "service-checkout",
+      "service-worker",
+    ]);
     assert.ok(ids.includes("service-gateway"));
     assert.ok(ids.includes("service-web"));
-    assert.ok(!ids.includes("service-search"), "search is isolated from orders-db");
+    assert.ok(
+      !ids.includes("service-search"),
+      "search is isolated from orders-db",
+    );
     const web = hits.find((h) => h.node.id === "service-web")!;
     assert.equal(web.depth, 3);
     assert.deepEqual(
@@ -80,7 +86,10 @@ test("similar incidents surface history on the service and its dependencies with
     assert.ok(numbers.includes("INC-1038"));
     assert.ok(numbers.includes("INC-0975"));
     assert.ok(numbers.includes("INC-0992"), "money -> risk is two hops away");
-    assert.ok(!numbers.includes("INC-0960"), "search is not upstream of checkout");
+    assert.ok(
+      !numbers.includes("INC-0960"),
+      "search is not upstream of checkout",
+    );
     const past = hits.find((h) => h.node.number === "INC-1038")!;
     assert.equal(past.rootCause?.id, "service-db");
     assert.equal(past.resolver?.handle, "priya");
@@ -113,8 +122,14 @@ test("decisions include rejected approaches reachable through dependencies", asy
   try {
     const hits = await graph.decisions("acme", "service-checkout");
     const ids = hits.map((h) => h.node.id);
-    assert.ok(ids.includes("dec-18"), "rejected restart decision is about checkout");
-    assert.ok(ids.includes("dec-12"), "pool constraint is about orders-db, one hop");
+    assert.ok(
+      ids.includes("dec-18"),
+      "rejected restart decision is about checkout",
+    );
+    assert.ok(
+      ids.includes("dec-12"),
+      "pool constraint is about orders-db, one hop",
+    );
     assert.ok(ids.includes("dec-20"), "risk canary is two hops away");
     const rejected = hits.find((h) => h.node.id === "dec-18")!.node;
     assert.equal(rejected.status, "rejected");
@@ -133,7 +148,10 @@ test("path explains how two nodes connect", async () => {
       path.map((p) => p.to),
       ["service-gateway", "service-money", "service-risk"],
     );
-    assert.equal(await graph.path("acme", "service-search", "service-db", 4), undefined);
+    assert.equal(
+      await graph.path("acme", "service-search", "service-db", 4),
+      undefined,
+    );
   } finally {
     await store.close();
   }

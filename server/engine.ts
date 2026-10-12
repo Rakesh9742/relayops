@@ -12,22 +12,45 @@ import {
 const randomUUID = () => globalThis.crypto.randomUUID();
 
 /** Scenario presets: the signals an operator would paste from monitoring. */
-export const SCENARIOS: Record<string, { signals: string[]; description: string }> = {
+export const SCENARIOS: Record<
+  string,
+  { signals: string[]; description: string }
+> = {
   pool: {
-    signals: ["pool.active = 20 / 20", "http.error_rate = 12.8%", "p95.latency = 2,840 ms"],
-    description: "Elevated 5xx responses. Database connection pool reports saturation.",
+    signals: [
+      "pool.active = 20 / 20",
+      "http.error_rate = 12.8%",
+      "p95.latency = 2,840 ms",
+    ],
+    description:
+      "Elevated 5xx responses. Database connection pool reports saturation.",
   },
   worker: {
-    signals: ["pool.active = 20 / 20", "worker.queue_depth = 4,120", "http.error_rate = 9.1%"],
-    description: "Elevated 5xx responses. Pool saturated while the background worker queue is growing.",
+    signals: [
+      "pool.active = 20 / 20",
+      "worker.queue_depth = 4,120",
+      "http.error_rate = 9.1%",
+    ],
+    description:
+      "Elevated 5xx responses. Pool saturated while the background worker queue is growing.",
   },
   cache: {
-    signals: ["cache.evicted_keys = 18,400", "http.error_rate = 6.2%", "sessions.logout_spike = true"],
-    description: "Users are being logged out. Cache miss rate climbed sharply in the last ten minutes.",
+    signals: [
+      "cache.evicted_keys = 18,400",
+      "http.error_rate = 6.2%",
+      "sessions.logout_spike = true",
+    ],
+    description:
+      "Users are being logged out. Cache miss rate climbed sharply in the last ten minutes.",
   },
   migration: {
-    signals: ["pool.active = 20 / 20", "http.error_rate = 12.8%", "p95.latency = 2,840 ms"],
-    description: "Elevated 5xx responses after a deployment. Database connection pool reports saturation.",
+    signals: [
+      "pool.active = 20 / 20",
+      "http.error_rate = 12.8%",
+      "p95.latency = 2,840 ms",
+    ],
+    description:
+      "Elevated 5xx responses after a deployment. Database connection pool reports saturation.",
   },
 };
 
@@ -206,16 +229,23 @@ export class Engine {
   }
   /** The active semantic fact naming the database behind a service: on the service or one hop upstream. */
   private async databaseFact(tenant: string, serviceId: string) {
-    const own = (await this.graph.memoriesFor(tenant, serviceId, "semantic")).find((m) => m.database);
+    const own = (
+      await this.graph.memoriesFor(tenant, serviceId, "semantic")
+    ).find((m) => m.database);
     if (own) return own;
     for (const s of await this.graph.suspects(tenant, serviceId, 1)) {
-      const fact = s.memories.find((m) => m.category === "semantic" && m.database);
+      const fact = s.memories.find(
+        (m) => m.category === "semantic" && m.database,
+      );
       if (fact) return fact;
     }
     return undefined;
   }
   /** A plan is current only if every memory it cites is still active at the same version. */
-  private async planIsCurrent(tenant: string, plan: { memoryIds: string[]; memoryVersions?: Record<string, number> }) {
+  private async planIsCurrent(
+    tenant: string,
+    plan: { memoryIds: string[]; memoryVersions?: Record<string, number> },
+  ) {
     for (const memoryId of plan.memoryIds) {
       const m = await this.store.get(tenant, memoryId);
       if (!m || m.status !== "active") return false;
@@ -274,10 +304,20 @@ export class Engine {
       let patch: Record<string, any> = { stage: incident.stage + 1 };
       let event: Entity;
       if (task.stage === 0) {
-        const result = await investigate(this.reasoning, this.graph, tenant, incident);
-        const rootCause = await this.store.get(tenant, result.rootCauseServiceId);
+        const result = await investigate(
+          this.reasoning,
+          this.graph,
+          tenant,
+          incident,
+        );
+        const rootCause = await this.store.get(
+          tenant,
+          result.rootCauseServiceId,
+        );
         if (!rootCause || rootCause.kind !== "service")
-          throw new Error(`Atlas named an unknown root cause (${result.rootCauseServiceId}). Retry the investigation.`);
+          throw new Error(
+            `Atlas named an unknown root cause (${result.rootCauseServiceId}). Retry the investigation.`,
+          );
         const touched = [...new Set(result.traces.flatMap((t) => t.nodeIds))];
         event = this.event(
           id,
@@ -294,7 +334,9 @@ export class Engine {
         );
         patch = {
           ...patch,
-          memoryReused: touched.filter((n) => n.startsWith("mem-") || n.includes(":memory:")).length,
+          memoryReused: touched.filter(
+            (n) => n.startsWith("mem-") || n.includes(":memory:"),
+          ).length,
           investigation: {
             summary: result.summary,
             rootCauseServiceId: result.rootCauseServiceId,
@@ -309,20 +351,43 @@ export class Engine {
         };
         edges.push({ from: id, to: rootCause.id, relation: "ROOT_CAUSE" });
         edges.push(
-          ...result.rootCauseMemoryIds.map((memoryId: string) => ({ from: task.id, to: memoryId, relation: "USES" })),
+          ...result.rootCauseMemoryIds.map((memoryId: string) => ({
+            from: task.id,
+            to: memoryId,
+            relation: "USES",
+          })),
         );
       } else if (task.stage === 1) {
         if (!incident.investigation)
-          throw new Error("No investigation on record. Restart the incident so Atlas can trace the root cause.");
-        const draft = await draftPlan(this.reasoning, this.graph, tenant, incident, incident.investigation);
+          throw new Error(
+            "No investigation on record. Restart the incident so Atlas can trace the root cause.",
+          );
+        const draft = await draftPlan(
+          this.reasoning,
+          this.graph,
+          tenant,
+          incident,
+          incident.investigation,
+        );
         const procedure = await this.store.get(tenant, draft.procedureId);
         const fact = await this.store.get(tenant, draft.factId);
-        if (!procedure || procedure.kind !== "memory" || procedure.status !== "active" || !procedure.action)
-          throw new Error("Sage selected a procedure that is not an active procedural memory. Review shared memory.");
+        if (
+          !procedure ||
+          procedure.kind !== "memory" ||
+          procedure.status !== "active" ||
+          !procedure.action
+        )
+          throw new Error(
+            "Sage selected a procedure that is not an active procedural memory. Review shared memory.",
+          );
         if (!fact || fact.kind !== "memory" || fact.status !== "active")
-          throw new Error("Sage selected a fact that is no longer current. Review shared memory.");
+          throw new Error(
+            "Sage selected a fact that is no longer current. Review shared memory.",
+          );
         if (draft.forbidden.includes(procedure.action))
-          throw new Error(`Procedure ${procedure.id} is forbidden by an engineering decision. Review decisions.`);
+          throw new Error(
+            `Procedure ${procedure.id} is forbidden by an engineering decision. Review decisions.`,
+          );
         const plan = {
           database: fact.database ?? incident.sandbox.database,
           action: procedure.action,
@@ -330,7 +395,10 @@ export class Engine {
           procedureId: procedure.id,
           factId: fact.id,
           memoryIds: [fact.id, procedure.id],
-          memoryVersions: { [fact.id]: fact.version, [procedure.id]: procedure.version },
+          memoryVersions: {
+            [fact.id]: fact.version,
+            [procedure.id]: procedure.version,
+          },
           decisionIds: draft.decisionIds,
           forbidden: draft.forbidden,
           steps: procedure.steps,
@@ -342,14 +410,29 @@ export class Engine {
           "sage",
           "A recovery plan is ready for review",
           draft.summary,
-          { type: "plan", memoryIds: plan.memoryIds, traces: draft.traces, simulated: draft.simulated },
+          {
+            type: "plan",
+            memoryIds: plan.memoryIds,
+            traces: draft.traces,
+            simulated: draft.simulated,
+          },
         );
         edges.push(
-          ...plan.memoryIds.map((memoryId: string) => ({ from: task.id, to: memoryId, relation: "USES" })),
-          ...draft.decisionIds.map((decisionId: string) => ({ from: task.id, to: decisionId, relation: "BASED_ON" })),
+          ...plan.memoryIds.map((memoryId: string) => ({
+            from: task.id,
+            to: memoryId,
+            relation: "USES",
+          })),
+          ...draft.decisionIds.map((decisionId: string) => ({
+            from: task.id,
+            to: decisionId,
+            relation: "BASED_ON",
+          })),
         );
       } else if (task.stage === 2) {
-        const fact = incident.plan ? await this.store.get(tenant, incident.plan.factId) : undefined;
+        const fact = incident.plan
+          ? await this.store.get(tenant, incident.plan.factId)
+          : undefined;
         if (
           !incident.plan ||
           !fact ||
@@ -388,8 +471,11 @@ export class Engine {
             "The simulated health checks failed. The incident remains unresolved.",
           );
         patch = { ...patch, status: "resolved", resolvedAt: Date.now() };
-        const rootCauseId = incident.investigation?.rootCauseServiceId ?? incident.serviceId;
-        const procedure = incident.plan ? await this.store.get(tenant, incident.plan.procedureId) : undefined;
+        const rootCauseId =
+          incident.investigation?.rootCauseServiceId ?? incident.serviceId;
+        const procedure = incident.plan
+          ? await this.store.get(tenant, incident.plan.procedureId)
+          : undefined;
         const learned = entity(`${id}:memory:outcome`, "memory", {
           category: "episodic",
           status: "active",
@@ -451,13 +537,17 @@ export class Engine {
         );
       }
       // Guard the incident, the task, and every memory this stage relied on.
-      const used = new Set<string>(
-        [...(patch.plan?.memoryIds ?? []), ...(incident.plan?.memoryIds ?? []), ...(patch.investigation?.rootCauseMemoryIds ?? [])],
-      );
+      const used = new Set<string>([
+        ...(patch.plan?.memoryIds ?? []),
+        ...(incident.plan?.memoryIds ?? []),
+        ...(patch.investigation?.rootCauseMemoryIds ?? []),
+      ]);
       const guards = [
         { id, version: incident.version },
         { id: task.id, version: task.version },
-        ...memory.filter((m) => used.has(m.id)).map((m) => ({ id: m.id, version: m.version })),
+        ...memory
+          .filter((m) => used.has(m.id))
+          .map((m) => ({ id: m.id, version: m.version })),
       ];
       const committed = await this.store.commit(tenant, nodes, edges, guards);
       if (!committed) await this.release(tenant, task);
@@ -506,9 +596,11 @@ export class Engine {
         "Pause the investigation before introducing new evidence.",
       );
     const old =
-      (incident.plan?.factId ? await this.store.get(tenant, incident.plan.factId) : undefined) ??
-      (await this.databaseFact(tenant, incident.serviceId));
-    if (!old || old.status !== "active" || !old.database) throw new MissingError("No current database fact found");
+      (incident.plan?.factId
+        ? await this.store.get(tenant, incident.plan.factId)
+        : undefined) ?? (await this.databaseFact(tenant, incident.serviceId));
+    if (!old || old.status !== "active" || !old.database)
+      throw new MissingError("No current database fact found");
     const database = `${old.database.replace(/-v\d+$/, "")}-v${old.version + 1}`;
     const fresh = entity(`mem-${randomUUID()}`, "memory", {
       category: "semantic",
@@ -605,13 +697,23 @@ export class Engine {
         content: String(n.content).slice(0, 2000),
       }));
     const fallback = `The incident is ${incident.status.replaceAll("_", " ")}. ${selected.map((m) => m.content).join(" ")}${incident.status === "awaiting_approval" ? " The recovery plan is waiting for your approval." : ""}`;
-    const result = await answer(this.reasoning, this.graph, tenant, incident, text, conversation, fallback);
+    const result = await answer(
+      this.reasoning,
+      this.graph,
+      tenant,
+      incident,
+      text,
+      conversation,
+      fallback,
+    );
     const reply = entity(`msg-${randomUUID()}`, "message", {
       incidentId: id,
       role: "assistant",
       content: result.text,
       memoryIds: result.traces.length
-        ? [...new Set(result.traces.flatMap((t) => t.nodeIds))].filter((n) => n.startsWith("mem-")).slice(0, 6)
+        ? [...new Set(result.traces.flatMap((t) => t.nodeIds))]
+            .filter((n) => n.startsWith("mem-"))
+            .slice(0, 6)
         : selected.map((m) => m.id),
       traces: result.traces,
       agent: "atlas",

@@ -34,16 +34,19 @@ After building, the API also serves the app at **http://127.0.0.1:4177**.
 
 ## What works
 
+- A workspace graph per tenant: 14 services with real dependencies, 4 teams, 8 people (ownership, on-call, who resolved what), 6 past incidents with root causes, 13 memories (episodic, semantic, procedural), and 4 engineering decisions including a rejected one.
+- Agents ask the graph questions through read-only tools: `suspects`, `similar_incidents`, `blast_radius`, `who_knows`, `decisions`, `memories`, `path`. Every call is recorded with the path behind the answer and shown on the timeline.
+- With an API key, the model chooses which tools to call (OpenAI Responses or Anthropic Messages tool use, bounded to six rounds). Without one, a deterministic policy runs the same tools so the trace is still real.
+- Four scenarios. **Hidden neighbour** has the same symptom as pool exhaustion but a second signal that only a service two hops away explains; Atlas must rule out the nearer suspect.
+- Sage picks a procedure from the root cause's memory, checks decisions, and refuses actions a rejected decision forbids. Plans cite exact memory versions and are invalidated if any cited memory is superseded.
+- Echo writes the verified outcome onto the root cause service and increments the runbook's verification count.
 - Three named specialists with durable task claims, version checks, expiring leases, and saved handoffs.
-- Episodic incident outcomes, semantic service facts, and procedural runbooks with verification history.
-- Graph-shaped retrieval: incident → affected service → connected memory, up to three hops.
-- Explicit recovery approval before applying a simulated change.
-- Memory correction: preserve the original fact, create a replacement, invalidate the current plan, and resume using the current endpoint.
-- Persisted conversations with source-linked context; AI follow-ups use the last 12 messages from that incident.
-- Server-side OpenAI or Claude explanations, with an in-app connection check and explicit simulation mode.
-- Two sample workspaces with server-authenticated scope. A demo owner can intentionally switch between them.
-- Desktop and mobile dashboard, timeline, graph view, searchable memory library, source details, agents, and settings.
-- Tenant-scoped export and an in-app demo playbook.
+- Memory correction: preserve the original fact, create a replacement with a `SUPERSEDES` edge, invalidate the current plan, and resume using the current endpoint.
+- Operator chat that queries the graph: "who should I page", "what breaks if orders-db goes down".
+- A data-driven graph view of every node and relationship with the latest agent's query paths highlighted.
+- Two sample workspaces with server-authenticated scope, tenant-scoped export, and an in-app demo playbook.
+
+See `docs/event-plan.md` for the FalkorDB implementation planned for the event window.
 
 ## Use FalkorDB
 
@@ -114,12 +117,13 @@ The graph integration test seeds and writes sample graphs. Do not point it at pr
 
 ## Demo in three minutes
 
-1. Start the preloaded Acme incident. Atlas recalls that restarting did not resolve the last pool exhaustion incident.
-2. Sage prepares a recovery plan and waits for approval. Inspect its source memories.
-3. Click **Introduce new evidence**. A simulated database migration supersedes the old fact and invalidates the plan. Inspect both versions in Shared memory.
-4. Reload the browser, or restart the API. Click **Resume from checkpoint**. Sage produces a plan for the current database.
-5. Approve the plan. Echo checks the simulated recovery and records an episodic outcome plus procedural verification history.
-6. Switch to **Orbit Financial**. Acme's incidents and messages are absent.
+1. Open **Shared memory → Graph view**. People, teams, services, incidents, memory, and decisions, with real edges.
+2. New incident → **Hidden neighbour**. Start it. Atlas runs `suspects`: orders-db (one hop) explains `pool.active`; notification-worker (two hops, sharing the database) explains `pool.active` and `worker.queue_depth`. Expand the trace to see the paths. Atlas names the worker and suggests who to page.
+3. Sage runs `decisions`, finds the rejected "automatic restart" decision, and proposes the worker drain runbook. The plan card shows what it will not do.
+4. Approve. Echo verifies and saves an episodic memory on the worker node; RB-11's verification count increments.
+5. In **Conversation**, ask "Who should I page and what else breaks if orders-db goes down?" The answer shows its `who_knows` and `blast_radius` queries.
+6. On a **Memory correction** incident, click **Introduce new evidence** at the approval step. The old fact is superseded, the plan is invalidated, and resume rebuilds it against the new endpoint.
+7. Switch to **Orbit Financial**. Different people, different history, nothing from Acme.
 
 To demonstrate abrupt worker recovery, kill only the app process while a task is running, restart it, and allow its 60-second lease to expire. The task can then be claimed again; an old worker's version cannot overwrite the new claim. Recovery effects in this prototype are stored state changes and committed atomically with their task checkpoint. Real external actions would require downstream idempotency support or an outbox, reconciliation, and independent verification.
 

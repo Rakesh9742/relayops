@@ -88,7 +88,10 @@ export interface ToolRun {
 type Turn =
   | { role: "user" | "assistant"; content: string }
   | { role: "tool_calls"; calls: ToolCall[]; raw?: unknown }
-  | { role: "tool_results"; results: Array<{ id: string; name: string; content: string }> };
+  | {
+      role: "tool_results";
+      results: Array<{ id: string; name: string; content: string }>;
+    };
 
 // Tools are read-only graph queries. The workflow owns approvals, actions, and memory writes.
 export class ReasoningClient {
@@ -137,7 +140,9 @@ export class ReasoningClient {
   ): Promise<ToolRun> {
     const config = this.config;
     if (config.provider === "simulation")
-      throw new ModelError("AI is disabled. Add a server API key to enable it.");
+      throw new ModelError(
+        "AI is disabled. Add a server API key to enable it.",
+      );
     const name = config.provider === "openai" ? "OpenAI" : "Anthropic";
     const turns: Turn[] = [{ role: "user", content: input }];
     const calls: ToolCall[] = [];
@@ -172,12 +177,18 @@ export class ReasoningClient {
         } catch (err) {
           content = `Tool error: ${err instanceof Error ? err.message : "failed"}`;
         }
-        results.push({ id: call.id, name: call.name, content: content.slice(0, 6000) });
+        results.push({
+          id: call.id,
+          name: call.name,
+          content: content.slice(0, 6000),
+        });
       }
       turns.push({ role: "tool_results", results });
       if (verdict) return { calls, text: result.text, verdict };
     }
-    throw new ModelError(`${name} did not finish within the tool budget. Retry the request.`);
+    throw new ModelError(
+      `${name} did not finish within the tool budget. Retry the request.`,
+    );
   }
 
   private async request(
@@ -260,7 +271,10 @@ export class ReasoningClient {
     if (config.provider === "openai") {
       const output = Array.isArray(parsed.output) ? parsed.output : [];
       const calls: ToolCall[] = output
-        .filter((i): i is Record<string, any> => object(i) && i.type === "function_call")
+        .filter(
+          (i): i is Record<string, any> =>
+            object(i) && i.type === "function_call",
+        )
         .map((i) => ({
           id: String(i.call_id),
           name: String(i.name),
@@ -268,9 +282,14 @@ export class ReasoningClient {
         }));
       const text = output
         .flatMap((i) =>
-          object(i) && i.type === "message" && Array.isArray(i.content) ? i.content : [],
+          object(i) && i.type === "message" && Array.isArray(i.content)
+            ? i.content
+            : [],
         )
-        .filter((p) => object(p) && p.type === "output_text" && typeof p.text === "string")
+        .filter(
+          (p) =>
+            object(p) && p.type === "output_text" && typeof p.text === "string",
+        )
         .map((p) => (p as { text: string }).text)
         .join("\n")
         .trim();
@@ -278,10 +297,18 @@ export class ReasoningClient {
     }
     const content = Array.isArray(parsed.content) ? parsed.content : [];
     const calls: ToolCall[] = content
-      .filter((p): p is Record<string, any> => object(p) && p.type === "tool_use")
-      .map((p) => ({ id: String(p.id), name: String(p.name), args: object(p.input) ? p.input : {} }));
+      .filter(
+        (p): p is Record<string, any> => object(p) && p.type === "tool_use",
+      )
+      .map((p) => ({
+        id: String(p.id),
+        name: String(p.name),
+        args: object(p.input) ? p.input : {},
+      }));
     const text = content
-      .filter((p) => object(p) && p.type === "text" && typeof p.text === "string")
+      .filter(
+        (p) => object(p) && p.type === "text" && typeof p.text === "string",
+      )
       .map((p) => (p as { text: string }).text)
       .join("\n")
       .trim();
@@ -303,7 +330,10 @@ export class ReasoningClient {
           signal: AbortSignal.timeout(40000),
           headers:
             config.provider === "openai"
-              ? { "Content-Type": "application/json", Authorization: `Bearer ${config.key}` }
+              ? {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${config.key}`,
+                }
               : {
                   "Content-Type": "application/json",
                   "x-api-key": config.key,
@@ -312,25 +342,49 @@ export class ReasoningClient {
           body: JSON.stringify(body),
         },
       );
-      if (!response.ok) throw new ModelError(`${name} request failed (${response.status}). ${help(response.status)}`);
+      if (!response.ok)
+        throw new ModelError(
+          `${name} request failed (${response.status}). ${help(response.status)}`,
+        );
       const parsed: unknown = await response.json();
-      if (!object(parsed)) throw new ModelError(`${name} returned an unreadable response. Retry the request.`);
+      if (!object(parsed))
+        throw new ModelError(
+          `${name} returned an unreadable response. Retry the request.`,
+        );
       if (config.provider === "openai" && parsed.status !== "completed")
-        throw new ModelError(`${name} did not complete its answer. Retry or select another model.`);
-      if (config.provider === "anthropic" && parsed.stop_reason === "max_tokens")
-        throw new ModelError(`${name} did not complete its answer. Retry the request.`);
-      this.state = { ...this.state, status: "ready", checkedAt: Date.now(), error: undefined };
+        throw new ModelError(
+          `${name} did not complete its answer. Retry or select another model.`,
+        );
+      if (
+        config.provider === "anthropic" &&
+        parsed.stop_reason === "max_tokens"
+      )
+        throw new ModelError(
+          `${name} did not complete its answer. Retry the request.`,
+        );
+      this.state = {
+        ...this.state,
+        status: "ready",
+        checkedAt: Date.now(),
+        error: undefined,
+      };
       return parsed;
     } catch (error) {
       const safeError =
         error instanceof ModelError
           ? error
           : new ModelError(
-              error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)
+              error instanceof Error &&
+                ["TimeoutError", "AbortError"].includes(error.name)
                 ? `${name} timed out. Retry the request.`
                 : `${name} could not be reached or returned an unreadable response. Retry the request.`,
             );
-      this.state = { ...this.state, status: "error", checkedAt: Date.now(), error: safeError.message };
+      this.state = {
+        ...this.state,
+        status: "error",
+        checkedAt: Date.now(),
+        error: safeError.message,
+      };
       throw safeError;
     }
   }

@@ -30,9 +30,17 @@ export interface GraphTools {
   /** Resolve a node id, exact name, or case-insensitive name/number to an id. */
   resolve(tenant: string, ref: string): Promise<string | undefined>;
   /** Services that break if `serviceId` fails: reverse DEPENDS_ON / ROUTES_TO. */
-  blastRadius(tenant: string, serviceId: string, depth?: number): Promise<Hit[]>;
+  blastRadius(
+    tenant: string,
+    serviceId: string,
+    depth?: number,
+  ): Promise<Hit[]>;
   /** Services `serviceId` depends on, with incidents where each was the root cause and active memory. */
-  suspects(tenant: string, serviceId: string, depth?: number): Promise<SuspectHit[]>;
+  suspects(
+    tenant: string,
+    serviceId: string,
+    depth?: number,
+  ): Promise<SuspectHit[]>;
   /** Resolved incidents on this service or on anything it depends on. */
   similarIncidents(tenant: string, serviceId: string): Promise<SimilarHit[]>;
   /** People connected to a service by on-call, ownership, or having resolved an incident there. */
@@ -40,9 +48,18 @@ export interface GraphTools {
   /** Accepted or rejected decisions about a service or anything it depends on. */
   decisions(tenant: string, serviceId: string): Promise<Hit[]>;
   /** Active memory attached to a service, optionally filtered by category. */
-  memoriesFor(tenant: string, serviceId: string, category?: string): Promise<Entity[]>;
+  memoriesFor(
+    tenant: string,
+    serviceId: string,
+    category?: string,
+  ): Promise<Entity[]>;
   /** Shortest directed path between two nodes, following any relation. */
-  path(tenant: string, from: string, to: string, max?: number): Promise<PathStep[] | undefined>;
+  path(
+    tenant: string,
+    from: string,
+    to: string,
+    max?: number,
+  ): Promise<PathStep[] | undefined>;
 }
 
 const STRUCTURAL = new Set(["DEPENDS_ON", "ROUTES_TO"]);
@@ -63,20 +80,33 @@ class Index {
     return this.nodes.get(id);
   }
   outgoing(id: string, relations?: Set<string>) {
-    return (this.out.get(id) ?? []).filter((e) => !relations || relations.has(e.relation));
+    return (this.out.get(id) ?? []).filter(
+      (e) => !relations || relations.has(e.relation),
+    );
   }
   incoming(id: string, relations?: Set<string>) {
-    return (this.in.get(id) ?? []).filter((e) => !relations || relations.has(e.relation));
+    return (this.in.get(id) ?? []).filter(
+      (e) => !relations || relations.has(e.relation),
+    );
   }
   /** Breadth-first walk. `forward` follows from->to; otherwise to->from. */
-  walk(start: string, relations: Set<string> | undefined, depth: number, forward: boolean) {
+  walk(
+    start: string,
+    relations: Set<string> | undefined,
+    depth: number,
+    forward: boolean,
+  ) {
     const seen = new Map<string, PathStep[]>([[start, []]]);
-    const queue: Array<{ id: string; path: PathStep[] }> = [{ id: start, path: [] }];
+    const queue: Array<{ id: string; path: PathStep[] }> = [
+      { id: start, path: [] },
+    ];
     const hits: Hit[] = [];
     while (queue.length) {
       const { id, path } = queue.shift()!;
       if (path.length >= depth) continue;
-      const edges = forward ? this.outgoing(id, relations) : this.incoming(id, relations);
+      const edges = forward
+        ? this.outgoing(id, relations)
+        : this.incoming(id, relations);
       for (const e of edges) {
         const next = forward ? e.to : e.from;
         if (seen.has(next)) continue;
@@ -95,7 +125,10 @@ class Index {
 export class IndexedGraph implements GraphTools {
   constructor(private store: Store) {}
   private async index(tenant: string) {
-    const [nodes, edges] = await Promise.all([this.store.all(tenant), this.store.edges(tenant)]);
+    const [nodes, edges] = await Promise.all([
+      this.store.all(tenant),
+      this.store.edges(tenant),
+    ]);
     return new Index(nodes, edges);
   }
   private active(n: Entity | undefined): n is Entity {
@@ -130,7 +163,9 @@ export class IndexedGraph implements GraphTools {
   async suspects(tenant: string, serviceId: string, depth = 2) {
     const g = await this.index(tenant);
     if (!g.get(serviceId)) return [];
-    const upstream = g.walk(serviceId, STRUCTURAL, depth, true).filter((h) => h.node.kind === "service");
+    const upstream = g
+      .walk(serviceId, STRUCTURAL, depth, true)
+      .filter((h) => h.node.kind === "service");
     // Siblings: other services that share a direct dependency. They are not on
     // the call path but can starve a shared resource (e.g. a worker holding
     // database connections).
@@ -144,7 +179,14 @@ export class IndexedGraph implements GraphTools {
         seen.add(e.from);
         siblings.push({
           node,
-          path: [...dep.path, { from: e.from, relation: `${e.relation} (shared)`, to: dep.node.id }],
+          path: [
+            ...dep.path,
+            {
+              from: e.from,
+              relation: `${e.relation} (shared)`,
+              to: dep.node.id,
+            },
+          ],
           depth: 2,
         });
       }
@@ -160,7 +202,10 @@ export class IndexedGraph implements GraphTools {
           .map((e) => g.get(e.to))
           .filter(this.active),
       }))
-      .sort((a, b) => a.depth - b.depth || b.rootCauseOf.length - a.rootCauseOf.length);
+      .sort(
+        (a, b) =>
+          a.depth - b.depth || b.rootCauseOf.length - a.rootCauseOf.length,
+      );
   }
 
   async similarIncidents(tenant: string, serviceId: string) {
@@ -168,17 +213,29 @@ export class IndexedGraph implements GraphTools {
     if (!g.get(serviceId)) return [];
     const scope = [
       { id: serviceId, path: [] as PathStep[] },
-      ...g.walk(serviceId, STRUCTURAL, 2, true).map((h) => ({ id: h.node.id, path: h.path })),
+      ...g
+        .walk(serviceId, STRUCTURAL, 2, true)
+        .map((h) => ({ id: h.node.id, path: h.path })),
     ];
     const out: SimilarHit[] = [];
     const seen = new Set<string>();
     for (const s of scope) {
       for (const e of g.incoming(s.id, new Set(["AFFECTS", "ROOT_CAUSE"]))) {
         const inc = g.get(e.from);
-        if (!inc || inc.kind !== "incident" || inc.status !== "resolved" || seen.has(inc.id)) continue;
+        if (
+          !inc ||
+          inc.kind !== "incident" ||
+          inc.status !== "resolved" ||
+          seen.has(inc.id)
+        )
+          continue;
         seen.add(inc.id);
-        const rootCause = g.outgoing(inc.id, new Set(["ROOT_CAUSE"])).map((x) => g.get(x.to))[0];
-        const resolver = g.incoming(inc.id, new Set(["RESOLVED"])).map((x) => g.get(x.from))[0];
+        const rootCause = g
+          .outgoing(inc.id, new Set(["ROOT_CAUSE"]))
+          .map((x) => g.get(x.to))[0];
+        const resolver = g
+          .incoming(inc.id, new Set(["RESOLVED"]))
+          .map((x) => g.get(x.from))[0];
         const learned = g
           .incoming(inc.id, new Set(["LEARNED_FROM"]))
           .map((x) => g.get(x.from))
@@ -193,7 +250,9 @@ export class IndexedGraph implements GraphTools {
         });
       }
     }
-    return out.sort((a, b) => a.depth - b.depth || b.node.createdAt - a.node.createdAt);
+    return out.sort(
+      (a, b) => a.depth - b.depth || b.node.createdAt - a.node.createdAt,
+    );
   }
 
   async whoKnows(tenant: string, serviceId: string) {
@@ -203,13 +262,20 @@ export class IndexedGraph implements GraphTools {
     const add = (id: string, reason: string, path: PathStep[]) => {
       const node = g.get(id);
       if (!node || node.kind !== "person") return;
-      const hit = people.get(id) ?? { node, path, depth: path.length, reasons: [] };
+      const hit = people.get(id) ?? {
+        node,
+        path,
+        depth: path.length,
+        reasons: [],
+      };
       hit.reasons.push(reason);
       if (path.length < hit.path.length) hit.path = path;
       people.set(id, hit);
     };
     for (const e of g.incoming(serviceId, new Set(["ON_CALL_FOR"])))
-      add(e.from, "on call", [{ from: e.from, relation: "ON_CALL_FOR", to: serviceId }]);
+      add(e.from, "on call", [
+        { from: e.from, relation: "ON_CALL_FOR", to: serviceId },
+      ]);
     for (const own of g.incoming(serviceId, new Set(["OWNS"])))
       for (const m of g.incoming(own.from, new Set(["MEMBER_OF"])))
         add(m.from, `member of ${g.get(own.from)?.name}`, [
@@ -222,7 +288,9 @@ export class IndexedGraph implements GraphTools {
           { from: r.from, relation: "RESOLVED", to: aff.from },
           { from: aff.from, relation: aff.relation, to: serviceId },
         ]);
-    return [...people.values()].sort((a, b) => b.reasons.length - a.reasons.length || a.depth - b.depth);
+    return [...people.values()].sort(
+      (a, b) => b.reasons.length - a.reasons.length || a.depth - b.depth,
+    );
   }
 
   async decisions(tenant: string, serviceId: string) {
@@ -230,7 +298,9 @@ export class IndexedGraph implements GraphTools {
     if (!g.get(serviceId)) return [];
     const scope = [
       { id: serviceId, path: [] as PathStep[] },
-      ...g.walk(serviceId, STRUCTURAL, 2, true).map((h) => ({ id: h.node.id, path: h.path })),
+      ...g
+        .walk(serviceId, STRUCTURAL, 2, true)
+        .map((h) => ({ id: h.node.id, path: h.path })),
     ];
     const hits: Hit[] = [];
     const seen = new Set<string>();
@@ -260,7 +330,9 @@ export class IndexedGraph implements GraphTools {
   async path(tenant: string, from: string, to: string, max = 4) {
     const g = await this.index(tenant);
     if (from === to) return [];
-    const hit = g.walk(from, undefined, max, true).find((h) => h.node.id === to);
+    const hit = g
+      .walk(from, undefined, max, true)
+      .find((h) => h.node.id === to);
     return hit?.path;
   }
 }

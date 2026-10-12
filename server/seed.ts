@@ -48,7 +48,14 @@ interface Vocabulary {
   external: string;
   teams: { commerce: string; platform: string; money: string; data: string };
   people: Record<
-    "lead" | "backend" | "sre" | "dba" | "moneyLead" | "riskEng" | "dataEng" | "newHire",
+    | "lead"
+    | "backend"
+    | "sre"
+    | "dba"
+    | "moneyLead"
+    | "riskEng"
+    | "dataEng"
+    | "newHire",
     { name: string; handle: string }
   >;
 }
@@ -143,7 +150,12 @@ export function buildWorkspaceGraph(workspaceId: string, now = Date.now()) {
     type: string,
     extra: Record<string, any> = {},
   ) =>
-    add(id, "service", { name, type, environment: "production", ...extra }, 30 * DAY);
+    add(
+      id,
+      "service",
+      { name, type, environment: "production", ...extra },
+      30 * DAY,
+    );
   svc("service-web", v.web, "frontend", { tier: "edge" });
   svc("service-gateway", v.gateway, "gateway", { tier: "edge" });
   svc("service-checkout", v.primary, "api", { tier: "core", slo: "99.95%" });
@@ -210,7 +222,12 @@ export function buildWorkspaceGraph(workspaceId: string, now = Date.now()) {
   ) => {
     const p = v.people[key];
     const id = `person-${p.handle}`;
-    add(id, "person", { name: p.name, handle: p.handle, role, skills }, 60 * DAY);
+    add(
+      id,
+      "person",
+      { name: p.name, handle: p.handle, role, skills },
+      60 * DAY,
+    );
     link(id, "MEMBER_OF", teamId);
     return id;
   };
@@ -219,10 +236,12 @@ export function buildWorkspaceGraph(workspaceId: string, now = Date.now()) {
     "connection pooling",
     "incident command",
   ]);
-  const backend = person("backend", "Senior backend engineer", "team-commerce", [
-    "query tuning",
-    "indexes",
-  ]);
+  const backend = person(
+    "backend",
+    "Senior backend engineer",
+    "team-commerce",
+    ["query tuning", "indexes"],
+  );
   const sre = person("sre", "Site reliability engineer", "team-platform", [
     "redis",
     "capacity",
@@ -482,7 +501,10 @@ export function buildWorkspaceGraph(workspaceId: string, now = Date.now()) {
     "INC-0975 · verified outcome",
     "echo",
     19 * DAY,
-    { signal: "worker.queue_depth", signals: ["worker.queue_depth", "pool.active"] },
+    {
+      signal: "worker.queue_depth",
+      signals: ["worker.queue_depth", "pool.active"],
+    },
     "inc-0975",
   );
   memory(
@@ -614,7 +636,12 @@ export function buildWorkspaceGraph(workspaceId: string, now = Date.now()) {
     age: number,
     extra: Record<string, any> = {},
   ) => {
-    add(id, "decision", { title, rationale, status: "accepted", ...extra }, age);
+    add(
+      id,
+      "decision",
+      { title, rationale, status: "accepted", ...extra },
+      age,
+    );
     link(id, "ABOUT", about);
     link(id, "MADE_BY", by);
     for (const b of basedOn) link(id, "BASED_ON", b);
