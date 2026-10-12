@@ -11,7 +11,7 @@ import "./styles.css";
 class BrowserDemoStore implements Store {
   backend = "browser" as const;
   private read(tenant: string): { nodes: Entity[]; edges: Edge[] } {
-    const value = localStorage.getItem(`relayops.browser-demo.v1.${tenant}`);
+    const value = localStorage.getItem(`relayops.browser-demo.v2.${tenant}`);
     return value ? JSON.parse(value) : { nodes: [], edges: [] };
   }
   async all(tenant: string) {
@@ -52,7 +52,7 @@ class BrowserDemoStore implements Store {
       )
         data.edges.push(edge);
     localStorage.setItem(
-      `relayops.browser-demo.v1.${tenant}`,
+      `relayops.browser-demo.v2.${tenant}`,
       JSON.stringify(data),
     );
     return true;

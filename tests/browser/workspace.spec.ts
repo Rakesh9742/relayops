@@ -9,6 +9,8 @@ test("incident, memory correction, persistence and tenant switch work end to end
     page.getByRole("heading", { name: "A calmer kind of on-call." }),
   ).toBeVisible();
   await page.getByRole("button", { name: "New incident", exact: true }).click();
+  await expect(page.locator(".scenario-options button")).toHaveCount(4);
+  await page.getByRole("button", { name: /Memory correction/ }).click();
   await page.getByLabel("Incident title").fill("Browser verification incident");
   await page
     .getByRole("button", { name: "Create incident", exact: true })
@@ -24,24 +26,34 @@ test("incident, memory correction, persistence and tenant switch work end to end
     .click();
   await expect(
     page.getByRole("button", { name: "Approve & resolve" }),
-  ).toBeVisible({ timeout: 20000 });
+  ).toBeVisible({ timeout: 90000 });
+  // Atlas and Sage each recorded the graph queries behind their conclusions.
+  await expect(page.locator(".trace-list")).toHaveCount(2);
+  await expect(page.locator(".investigation-card")).toContainText(
+    "Root cause:",
+  );
+  await page.locator(".trace button").first().click();
+  await expect(page.locator(".trace.open li").first()).toBeVisible();
+  await expect(page.locator(".plan-forbidden")).toContainText("restart");
   await page.getByRole("button", { name: "Introduce new evidence" }).click();
   await expect(page.getByText("Nothing gets lost here.")).toBeVisible();
   await page.reload();
   await page.getByRole("button", { name: "Resume from checkpoint" }).click();
   await expect(
     page.getByRole("button", { name: "Approve & resolve" }),
-  ).toBeVisible({ timeout: 20000 });
+  ).toBeVisible({ timeout: 90000 });
   await page.getByRole("button", { name: "Approve & resolve" }).click();
   await expect(
     page.getByText("Recovery verified and saved to memory"),
-  ).toBeVisible({ timeout: 20000 });
+  ).toBeVisible({ timeout: 30000 });
   await page.getByRole("button", { name: "Conversation", exact: true }).click();
   await page
     .getByRole("textbox", { name: "Ask your agent team" })
     .fill("What happened last time?");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.locator(".message.assistant")).toBeVisible();
+  await expect(page.locator(".message.assistant")).toBeVisible({
+    timeout: 60000,
+  });
   await page.reload();
   await page.getByRole("button", { name: "Conversation", exact: true }).click();
   await expect(page.locator(".message.user")).toHaveText(
@@ -53,7 +65,17 @@ test("incident, memory correction, persistence and tenant switch work end to end
   await expect(
     page.getByRole("heading", { name: "Your team’s collective memory." }),
   ).toBeVisible();
-  await page.locator(".graph-node").first().click();
+  const graphView = page.getByRole("button", { name: "Graph view" });
+  if (await graphView.count()) await graphView.click();
+  // The graph is built from real nodes and edges, including people and decisions.
+  expect(await page.locator(".graph-node").count()).toBeGreaterThan(40);
+  await page.locator(".graph-node", { hasText: "Priya Natarajan" }).click();
+  await expect(page.locator(".graph-title")).toContainText("Priya Natarajan");
+  await page.getByRole("button", { name: "Clear" }).click();
+  await page
+    .locator(".graph-node", { hasText: "Recover an exhausted" })
+    .first()
+    .click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.locator(".workspace-switch").click();

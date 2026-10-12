@@ -508,6 +508,17 @@ export function buildWorkspaceGraph(workspaceId: string, now = Date.now()) {
     "inc-0975",
   );
   memory(
+    "mem-worker-db",
+    "service-worker",
+    "semantic",
+    `${v.worker} shares ${v.primaryDb} with ${v.primary}`,
+    `${v.worker} writes to ${v.primaryDb} in us-east-1 using its own pool of 10 connections. Draining its queue frees ${v.primaryDb} connections for ${v.primary}.`,
+    "Service catalog · revision 12",
+    "atlas",
+    18 * DAY,
+    { database: v.primaryDb, poolLimit: 10 },
+  );
+  memory(
     "mem-worker-runbook",
     "service-worker",
     "procedural",
@@ -569,6 +580,17 @@ export function buildWorkspaceGraph(workspaceId: string, now = Date.now()) {
     15 * DAY,
     { signal: "cache.evicted_keys" },
     "inc-1007",
+  );
+  memory(
+    "mem-cache-config",
+    "service-cache",
+    "semantic",
+    `${v.cache} runs with 2 GB maxmemory`,
+    `${v.cache} is a single Redis instance with maxmemory 2 GB and policy volatile-lru. Sessions for ${v.primary} and ${v.catalog} live here.`,
+    "Service catalog · revision 12",
+    "atlas",
+    14 * DAY,
+    { maxmemory: "2gb" },
   );
   memory(
     "mem-cache-runbook",

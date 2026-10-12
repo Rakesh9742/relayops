@@ -494,8 +494,8 @@ async function simulatedPlan(
   const procedure = procedures[0];
   const fact =
     rootFacts.find((f) => f.database) ??
-    ownFacts.find((f) => f.database) ??
     rootFacts[0] ??
+    ownFacts.find((f) => f.database) ??
     ownFacts[0];
   if (!procedure || !fact)
     throw new Error(

@@ -20,7 +20,7 @@ test("seed builds a connected topology with people, incidents, memory, and decis
   assert.equal(kinds.person, 8);
   assert.equal(kinds.team, 4);
   assert.equal(kinds.incident, 6);
-  assert.equal(kinds.memory, 13);
+  assert.equal(kinds.memory, 15);
   assert.equal(kinds.decision, 4);
   const ids = new Set(nodes.map((n) => n.id));
   for (const e of edges) {

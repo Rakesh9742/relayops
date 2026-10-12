@@ -388,8 +388,13 @@ export class Engine {
           throw new Error(
             `Procedure ${procedure.id} is forbidden by an engineering decision. Review decisions.`,
           );
+        const rootCause = await this.store.get(
+          tenant,
+          incident.investigation.rootCauseServiceId,
+        );
         const plan = {
           database: fact.database ?? incident.sandbox.database,
+          target: fact.database ?? rootCause?.name ?? incident.service,
           action: procedure.action,
           targetPool: procedure.targetPool ?? incident.sandbox.pool,
           procedureId: procedure.id,
@@ -454,11 +459,15 @@ export class Engine {
           latency: 186,
           appliedAt: Date.now(),
         };
+        const applied =
+          incident.plan.action === "increase-pool"
+            ? `Updated the simulated pool capacity from ${incident.sandbox.pool} to ${incident.plan.targetPool} on ${incident.plan.database}.`
+            : `Applied "${incident.plan.action}" to ${incident.plan.target ?? incident.plan.database} in the sandbox: ${(incident.plan.steps ?? []).join("; ")}.`;
         event = this.event(
           id,
           "sage",
           "Recovery applied · handed off to Echo",
-          `Updated the simulated pool capacity from ${incident.sandbox.pool} to ${incident.plan.targetPool} on ${incident.plan.database}. The action and checkpoint were saved together. Echo can now verify the outcome.`,
+          `${applied} The action and checkpoint were saved together. Echo can now verify the outcome.`,
           { type: "handoff", memoryIds: incident.plan.memoryIds },
         );
       } else {
@@ -479,7 +488,7 @@ export class Engine {
         const learned = entity(`${id}:memory:outcome`, "memory", {
           category: "episodic",
           status: "active",
-          title: `${procedure?.title ?? "Recovery"} verified on ${incident.sandbox.database}`,
+          title: `${procedure?.title ?? "Recovery"} verified on ${incident.plan?.target ?? incident.sandbox.database}`,
           content: `${incident.number}: ${incident.investigation?.rootCauseService ?? incident.service} was the root cause. Applying ${procedure?.id ?? "the plan"} (${incident.plan?.action ?? "recovery"}) reduced simulated errors from 12.8% to 0.3% and p95 latency from 2,840 ms to 186 ms.`,
           source: `${incident.number} · Echo verification`,
           serviceId: rootCauseId,
