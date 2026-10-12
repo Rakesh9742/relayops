@@ -1,0 +1,58 @@
+{
+  "name": "relayops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c green,blue \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --import tsx --watch --env-file-if-exists=.env server/index.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "build:demo": "node --import tsx scripts/build-demo.ts",
+    "start": "node --import tsx --env-file-if-exists=.env server/index.ts",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "benchmark": "node --import tsx --env-file-if-exists=.env scripts/benchmark.ts",
+    "format": "prettier --write src server scripts tests"
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "lucide-react": "0.475.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zod": "3.25.76"
+  },
+  "peerDependencies": {
+    "falkordb": "*"
+  },
+  "peerDependenciesMeta": {
+    "falkordb": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@types/express": "5.0.6",
+    "@types/node": "24.13.2",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "concurrently": "9.2.4",
+    "esbuild": "^0.25.12",
+    "prettier": "^3.8.1",
+    "tsx": "4.22.4",
+    "typescript": "5.9.3",
+    "vite": "6.4.3"
+  },
+  "overrides": {
+    "nanoid": "3.3.19",
+    "rollup": "4.63.1",
+    "body-parser": "2.2.2",
+    "type-is": {
+      "content-type": "2.0.0"
+    }
+  }
+}

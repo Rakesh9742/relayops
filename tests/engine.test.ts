@@ -1,0 +1,237 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SQLiteStore, createStore } from "../server/store";
+import { seed } from "../server/seed";
+import { Engine } from "../server/engine";
+
+async function fixture() {
+  const store = new SQLiteStore(":memory:");
+  await seed(store);
+  const engine = new Engine(store, 0, false);
+  const incident = await engine.create("acme", {
+    title: "Checkout service errors",
+    description: "Test incident",
+    severity: "P1",
+    scenario: "pool",
+  });
+  return { store, engine, incident };
+}
+test("agents retrieve connected memory, hand off, await approval, and persist a verified outcome", async () => {
+  const { store, engine, incident } = await fixture();
+  try {
+    await engine.action("acme", incident.id, "start");
+    assert.equal(await engine.step("acme", incident.id), true);
+    let current = await store.get("acme", incident.id);
+    assert.equal(current?.stage, 1);
+    assert.equal(current?.memoryReused, 4);
+    await engine.step("acme", incident.id);
+    current = await store.get("acme", incident.id);
+    assert.equal(current?.status, "awaiting_approval");
+    assert.equal(await engine.step("acme", incident.id), false);
+    await engine.action("acme", incident.id, "approve");
+    await engine.step("acme", incident.id);
+    await engine.step("acme", incident.id);
+    current = await store.get("acme", incident.id);
+    assert.equal(current?.status, "resolved");
+    assert.equal(current?.sandbox.pool, 40);
+    assert.ok(
+      (await store.context("acme", incident.id)).some(
+        (m) => m.incidentId === incident.id,
+      ),
+    );
+    assert.equal(
+      (await store.edges("acme")).filter((e) => e.relation === "HANDS_OFF_TO")
+        .length,
+      3,
+    );
+    assert.equal((await store.get("acme", "mem-playbook"))?.verifiedRuns, 1);
+  } finally {
+    await store.close();
+  }
+});
+test("50 workers competing for a task produce exactly one successful claim", async () => {
+  const { store, engine, incident } = await fixture();
+  try {
+    const claims = await Promise.all(
+      Array.from({ length: 50 }, () =>
+        engine.claim("acme", `${incident.id}:task:0`),
+      ),
+    );
+    assert.equal(claims.filter(Boolean).length, 1);
+  } finally {
+    await store.close();
+  }
+});
+test("memory correction preserves history and prevents approval of an outdated plan", async () => {
+  const { store, engine, incident } = await fixture();
+  try {
+    await engine.action("acme", incident.id, "start");
+    await engine.step("acme", incident.id);
+    await engine.step("acme", incident.id);
+    const fresh = await engine.migrate("acme", incident.id);
+    assert.equal(
+      (await store.get("acme", "mem-topology"))?.status,
+      "superseded",
+    );
+    assert.equal((await store.get("acme", incident.id))?.plan, null);
+    await assert.rejects(() => engine.action("acme", incident.id, "approve"));
+    const context = await store.context("acme", incident.id);
+    assert.ok(context.some((m) => m.id === fresh.id));
+    assert.ok(!context.some((m) => m.id === "mem-topology"));
+    await engine.action("acme", incident.id, "resume");
+    await engine.step("acme", incident.id);
+    assert.equal(
+      (await store.get("acme", incident.id))?.plan.database,
+      fresh.database,
+    );
+    await engine.action("acme", incident.id, "approve");
+    await engine.step("acme", incident.id);
+    await engine.step("acme", incident.id);
+    assert.equal((await store.get("acme", incident.id))?.status, "resolved");
+  } finally {
+    await store.close();
+  }
+});
+test("workspace scope prevents cross-tenant lookup and graph traversal", async () => {
+  const { store, engine, incident } = await fixture();
+  try {
+    assert.equal(await store.get("orbit", incident.id), undefined);
+    assert.deepEqual(await store.context("orbit", incident.id), []);
+    await assert.rejects(
+      () => engine.action("orbit", incident.id, "start"),
+      /not found/,
+    );
+    await engine.message("acme", incident.id, "What happened last time?");
+    assert.equal(
+      (await store.all("orbit")).filter((n) => n.kind === "message").length,
+      0,
+    );
+    assert.equal(
+      (await store.all("acme")).filter((n) => n.kind === "message").length,
+      2,
+    );
+  } finally {
+    await store.close();
+  }
+});
+test("paused incident and conversation survive closing and reopening the database", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "relayops-test-"));
+  const path = join(dir, "memory.db");
+  let store = new SQLiteStore(path);
+  try {
+    await seed(store);
+    let engine = new Engine(store, 0, false);
+    const incident = await engine.create("acme", {
+      title: "Persistent incident test",
+      description: "Restart this process",
+      severity: "P1",
+      scenario: "pool",
+    });
+    await engine.action("acme", incident.id, "start");
+    await engine.step("acme", incident.id);
+    await engine.action("acme", incident.id, "pause");
+    await engine.message("acme", incident.id, "Remember this conversation");
+    await store.close();
+    store = new SQLiteStore(path);
+    engine = new Engine(store, 0, false);
+    assert.equal((await store.get("acme", incident.id))?.status, "paused");
+    assert.equal(
+      (await store.all("acme")).filter((n) => n.kind === "message").length,
+      2,
+    );
+    await engine.action("acme", incident.id, "resume");
+    await engine.step("acme", incident.id);
+    assert.equal(
+      (await store.get("acme", incident.id))?.status,
+      "awaiting_approval",
+    );
+  } finally {
+    await store.close();
+    rmSync(dir, { recursive: true });
+  }
+});
+test("an expired task lease can be reclaimed; the old worker cannot overwrite it", async () => {
+  const { store, engine, incident } = await fixture();
+  try {
+    const claim = (await engine.claim("acme", `${incident.id}:task:0`))!;
+    await store.commit(
+      "acme",
+      [{ ...claim, version: claim.version + 1, leaseUntil: Date.now() - 1 }],
+      [],
+      [{ id: claim.id, version: claim.version }],
+    );
+    const reclaimed = await engine.claim("acme", claim.id);
+    assert.ok(reclaimed);
+    assert.notEqual(claim.claim, reclaimed.claim);
+    const stale = await store.commit(
+      "acme",
+      [{ ...claim, status: "done", version: claim.version + 1 }],
+      [],
+      [{ id: claim.id, version: claim.version }],
+    );
+    assert.equal(stale, false);
+  } finally {
+    await store.close();
+  }
+});
+test("simultaneous incident runs do not duplicate a recovery or lose procedure updates", async () => {
+  const { store, engine, incident } = await fixture();
+  try {
+    await engine.action("acme", incident.id, "start");
+    await Promise.all(
+      Array.from({ length: 20 }, () => engine.step("acme", incident.id)),
+    );
+    assert.equal((await store.get("acme", incident.id))?.stage, 1);
+    await engine.step("acme", incident.id);
+    await engine.action("acme", incident.id, "approve");
+    await Promise.all(
+      Array.from({ length: 20 }, () => engine.step("acme", incident.id)),
+    );
+    assert.equal(
+      (await store.all("acme")).filter(
+        (n) => n.kind === "event" && n.type === "handoff",
+      ).length,
+      1,
+    );
+  } finally {
+    await store.close();
+  }
+});
+test(
+  "FalkorDB integration: scoped traversal, guarded writes, correction and complete recovery",
+  { skip: process.env.TEST_FALKORDB !== "1" },
+  async () => {
+    const store = await createStore();
+    assert.equal(store.backend, "falkordb");
+    try {
+      await seed(store);
+      const engine = new Engine(store, 0, false);
+      const incident = await engine.create("acme", {
+        title: "FalkorDB integration incident",
+        description: "Graph-backed integration test",
+        severity: "P2",
+        scenario: "pool",
+      });
+      assert.ok((await store.context("acme", incident.id)).length >= 4);
+      assert.equal((await store.context("orbit", incident.id)).length, 0);
+      await engine.action("acme", incident.id, "start");
+      const results = await Promise.all(
+        Array.from({ length: 20 }, () => engine.step("acme", incident.id)),
+      );
+      assert.equal(results.filter(Boolean).length, 1);
+      await engine.step("acme", incident.id);
+      await engine.migrate("acme", incident.id);
+      await engine.action("acme", incident.id, "resume");
+      await engine.step("acme", incident.id);
+      await engine.action("acme", incident.id, "approve");
+      await engine.step("acme", incident.id);
+      await engine.step("acme", incident.id);
+      assert.equal((await store.get("acme", incident.id))?.status, "resolved");
+    } finally {
+      await store.close();
+    }
+  },
+);
