@@ -30,6 +30,20 @@ const completed = (text: string) => ({
 });
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
+/** A Responses API turn that calls one function. */
+const toolCall = (name: string, args: Record<string, unknown>, id = `call_${name}`) => ({
+  status: "completed",
+  output: [
+    { type: "reasoning", summary: [] },
+    { type: "function_call", call_id: id, name, arguments: JSON.stringify(args) },
+  ],
+});
+/** The first user turn of a Responses API request body. */
+const firstInput = (init: RequestInit) => {
+  const body = JSON.parse(String(init.body));
+  const user = body.input.find((t: any) => t.role === "user");
+  return JSON.parse(user.content);
+};
 
 test("provider selection is explicit; missing keys cannot silently change provider", () => {
   assert.deepEqual(modelConfigFromEnv({}), { provider: "simulation" });
@@ -188,11 +202,13 @@ test("AI follow-ups retrieve saved incident conversation after restart and exclu
   const path = join(dir, "memory.db");
   let store = new SQLiteStore(path);
   const inputs: any[] = [];
+  const bodies: string[] = [];
   t.mock.method(
     globalThis,
     "fetch",
     async (_url: unknown, init: RequestInit) => {
-      inputs.push(JSON.parse(JSON.parse(String(init.body)).input));
+      bodies.push(String(init.body));
+      inputs.push(firstInput(init));
       return response(
         completed("The pool procedure is relevant [mem-playbook]."),
       );
@@ -242,11 +258,10 @@ test("AI follow-ups retrieve saved incident conversation after restart and exclu
     assert.ok(
       followup.conversation.some((turn: any) => turn.role === "assistant"),
     );
-    assert.ok(!JSON.stringify(inputs).includes("ORBIT_PRIVATE"));
-    assert.ok(!JSON.stringify(inputs).includes("OTHER_INCIDENT_PRIVATE"));
-    assert.ok(
-      followup.evidence.every((memory: any) => memory.id && memory.version),
-    );
+    assert.ok(!bodies.join().includes("ORBIT_PRIVATE"));
+    assert.ok(!bodies.join().includes("OTHER_INCIDENT_PRIVATE"));
+    assert.equal(followup.incident.id, incident.id);
+    assert.ok(bodies.at(-1)!.includes('"name":"who_knows"'), "graph tools are offered");
     assert.equal(
       (await store.all("acme")).filter(
         (n) => n.kind === "message" && n.incidentId === incident.id,
@@ -262,13 +277,25 @@ test("AI follow-ups retrieve saved incident conversation after restart and exclu
 test("model failure preserves the task checkpoint and an explicit retry completes the handoff", async (t) => {
   const store = new SQLiteStore(":memory:");
   let fail = true;
-  t.mock.method(globalThis, "fetch", async () =>
-    fail
-      ? response({ error: "test-only-key" }, 429)
-      : response(
-          completed("Pool exhaustion is supported by memory [mem-topology]."),
-        ),
-  );
+  const script = [
+    toolCall("suspects", { serviceId: "service-checkout" }),
+    toolCall("finish", {
+      summary: "Pool exhaustion on orders-db is supported by memory [mem-topology].",
+      rootCauseServiceId: "service-db",
+      rootCauseMemoryIds: ["mem-topology", "mem-playbook"],
+      ruledOut: ["service-cache"],
+      impactedServiceIds: ["service-gateway"],
+    }),
+  ];
+  let turn = 0;
+  const toolResults: string[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: unknown, init: RequestInit) => {
+    if (fail) return response({ error: "test-only-key" }, 429);
+    const body = JSON.parse(String(init.body));
+    for (const item of body.input)
+      if (item.type === "function_call_output") toolResults.push(item.output);
+    return response(script[turn++]);
+  });
   try {
     await seed(store);
     const engine = new Engine(store, 0, true, config);
@@ -290,7 +317,18 @@ test("model failure preserves the task checkpoint and an explicit retry complete
     fail = false;
     await engine.action("acme", incident.id, "resume");
     assert.equal(await engine.step("acme", incident.id), true);
-    assert.equal((await store.get("acme", incident.id))?.stage, 1);
+    const after = await store.get("acme", incident.id);
+    assert.equal(after?.stage, 1);
+    assert.equal(after?.investigation.rootCauseServiceId, "service-db");
+    assert.equal(after?.investigation.toolCalls, 1, "finish is not a graph query");
+    assert.ok(toolResults[0].includes("service-db"), "model received real graph results");
+    const finding = (await store.all("acme")).find((n) => n.kind === "event" && n.type === "finding");
+    assert.equal(finding?.traces.length, 1);
+    assert.equal(finding?.traces[0].tool, "suspects");
+    assert.ok(finding?.traces[0].paths.length > 0, "trace carries graph paths");
+    assert.ok(
+      (await store.edges("acme")).some((e) => e.from === incident.id && e.to === "service-db" && e.relation === "ROOT_CAUSE"),
+    );
     assert.equal(engine.modelInfo.status, "ready");
   } finally {
     await store.close();

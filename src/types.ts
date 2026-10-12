@@ -4,9 +4,42 @@ export type NodeKind =
   | "event"
   | "task"
   | "service"
+  | "person"
+  | "team"
+  | "decision"
   | "message";
 export type MemoryType = "episodic" | "semantic" | "procedural";
 export type AgentId = "atlas" | "sage" | "echo";
+
+/** Typed relationships. These become real relationship types in the graph store. */
+export type Relation =
+  // topology
+  | "DEPENDS_ON" // service -> service it calls
+  | "ROUTES_TO" // gateway -> service
+  // people
+  | "OWNS" // team -> service
+  | "MEMBER_OF" // person -> team
+  | "ON_CALL_FOR" // person -> service
+  | "RESOLVED" // person -> incident
+  // incidents
+  | "AFFECTS" // incident -> service
+  | "ROOT_CAUSE" // incident -> service that actually failed
+  | "SIMILAR_TO" // incident -> incident
+  // memory
+  | "HAS_MEMORY" // service -> memory
+  | "LEARNED_FROM" // memory -> incident
+  | "SUPERSEDES" // memory -> memory
+  // decisions
+  | "ABOUT" // decision -> service
+  | "MADE_BY" // decision -> person
+  | "BASED_ON" // decision -> incident | memory
+  // workflow
+  | "HAS_EVENT"
+  | "HAS_TASK"
+  | "HAS_MESSAGE"
+  | "HANDS_OFF_TO"
+  | "USES";
+
 export interface Entity {
   id: string;
   kind: NodeKind;
@@ -17,7 +50,7 @@ export interface Entity {
 export interface Edge {
   from: string;
   to: string;
-  relation: string;
+  relation: Relation | string;
 }
 export interface Workspace {
   id: string;
@@ -43,6 +76,23 @@ export interface Snapshot {
   modelInfo: ModelInfo;
   serverStartedAt: number;
 }
+
+/** One hop in a graph path, used to show the reasoning behind an answer. */
+export interface PathStep {
+  from: string;
+  relation: string;
+  to: string;
+}
+
+/** A recorded graph tool invocation by an agent. Stored on events for traceability. */
+export interface ToolTrace {
+  tool: string;
+  args: Record<string, any>;
+  summary: string;
+  nodeIds: string[];
+  paths?: PathStep[];
+}
+
 export const AGENTS = [
   {
     id: "atlas" as AgentId,

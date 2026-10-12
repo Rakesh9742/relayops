@@ -26,10 +26,20 @@ test("agents retrieve connected memory, hand off, await approval, and persist a 
     assert.equal(await engine.step("acme", incident.id), true);
     let current = await store.get("acme", incident.id);
     assert.equal(current?.stage, 1);
-    assert.equal(current?.memoryReused, 4);
+    assert.ok(current?.memoryReused >= 4);
+    assert.equal(current?.investigation.rootCauseServiceId, "service-db");
+    assert.ok(current?.investigation.ruledOut.includes("service-cache"));
+    assert.ok(current?.investigation.impactedServiceIds.includes("service-gateway"));
+    const finding = (await store.all("acme")).find((n) => n.kind === "event" && n.type === "finding");
+    assert.ok(finding?.traces.some((t: any) => t.tool === "suspects"));
+    assert.ok(finding?.traces.some((t: any) => t.tool === "blast_radius"));
     await engine.step("acme", incident.id);
     current = await store.get("acme", incident.id);
     assert.equal(current?.status, "awaiting_approval");
+    assert.equal(current?.plan.procedureId, "mem-playbook");
+    assert.equal(current?.plan.factId, "mem-topology");
+    assert.ok(current?.plan.forbidden.includes("restart"), "rejected decision forbids restart");
+    assert.ok(current?.plan.decisionIds.includes("dec-18"));
     assert.equal(await engine.step("acme", incident.id), false);
     await engine.action("acme", incident.id, "approve");
     await engine.step("acme", incident.id);
@@ -47,7 +57,34 @@ test("agents retrieve connected memory, hand off, await approval, and persist a 
         .length,
       3,
     );
-    assert.equal((await store.get("acme", "mem-playbook"))?.verifiedRuns, 1);
+    assert.equal((await store.get("acme", "mem-playbook"))?.verifiedRuns, 2);
+    const learned = await store.get("acme", `${incident.id}:memory:outcome`);
+    assert.equal(learned?.serviceId, "service-db", "outcome attaches to the root cause");
+    assert.ok(
+      (await store.edges("acme")).some((e) => e.from === incident.id && e.relation === "ROOT_CAUSE" && e.to === "service-db"),
+    );
+  } finally {
+    await store.close();
+  }
+});
+test("a worker-queue signal steers the investigation to a different root cause and procedure", async () => {
+  const store = new SQLiteStore(":memory:");
+  try {
+    await seed(store);
+    const engine = new Engine(store, 0, false);
+    const incident = await engine.create("acme", {
+      title: "Checkout errors with worker backlog",
+      description: "",
+      severity: "P1",
+      scenario: "worker",
+    });
+    await engine.action("acme", incident.id, "start");
+    await engine.step("acme", incident.id);
+    const current = await store.get("acme", incident.id);
+    assert.equal(current?.investigation.rootCauseServiceId, "service-worker");
+    assert.ok(current?.investigation.rootCauseMemoryIds.includes("mem-worker-pool"));
+    await engine.step("acme", incident.id);
+    assert.equal((await store.get("acme", incident.id))?.plan.procedureId, "mem-worker-runbook");
   } finally {
     await store.close();
   }
