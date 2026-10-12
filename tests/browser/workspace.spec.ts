@@ -35,7 +35,7 @@ test("incident, memory correction, persistence and tenant switch work end to end
   expect(await page.locator(".live-steps button").count()).toBeGreaterThan(2);
   await expect(page.locator(".live-changes")).toContainText("ROOT_CAUSE");
   expect(
-    await page.locator(".graph-viewport.live .graph-node").count(),
+    await page.locator(".force-graph.live .fg-node").count(),
   ).toBeGreaterThan(10);
   // Atlas and Sage each recorded the graph queries behind their conclusions.
   await page.getByRole("button", { name: "Live timeline" }).click();
@@ -79,16 +79,26 @@ test("incident, memory correction, persistence and tenant switch work end to end
   const graphView = page.getByRole("button", { name: "Graph view" });
   if (await graphView.count()) await graphView.click();
   // The graph is built from real nodes and edges, including people and decisions.
-  expect(await page.locator(".graph-node").count()).toBeGreaterThan(40);
-  await page.locator(".graph-node", { hasText: "Priya Natarajan" }).click();
+  expect(await page.locator(".fg-node").count()).toBeGreaterThan(40);
+  await expect(page.locator(".fg-legend span")).toHaveCount(9);
+  await page.waitForTimeout(2500); // let the simulation settle before clicking
+  await page
+    .locator(".fg-node", { hasText: "Priya Natarajan" })
+    .click({ force: true });
   await expect(page.locator(".graph-title")).toContainText("Priya Natarajan");
   await page.getByRole("button", { name: "Clear" }).click();
   await page
-    .locator(".graph-node", { hasText: "Recover an exhausted" })
+    .locator(".fg-node", { hasText: "Recover an exhausted" })
     .first()
-    .click();
+    .click({ force: true });
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
+  // Theme toggle persists.
+  await page.getByRole("button", { name: "Switch to dark theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
   await page.locator(".workspace-switch").click();
   await page.getByRole("button", { name: "or Orbit Financial" }).click();
   await expect(page.locator(".workspace-switch")).toContainText(

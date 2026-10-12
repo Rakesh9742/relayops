@@ -1,10 +1,12 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import { ForceGraph, nodeColor, labelFor } from "./ForceGraph";
 import {
   Activity,
   ArrowDown,
@@ -38,6 +40,7 @@ import {
   LockKeyhole,
   Menu,
   MessageSquare,
+  Moon,
   MoreHorizontal,
   Network,
   Pause,
@@ -50,6 +53,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Sun,
   Terminal,
   TriangleAlert,
   Waypoints,
@@ -301,72 +305,8 @@ function LiveGraph({
     ? String(live.pending.args.serviceId ?? live.pending.args.from ?? "")
     : "";
 
-  // Layout: columns by kind, rows sorted so the affected service is near the middle.
-  const columns: Array<{ kinds: string[]; x: number; title: string }> = [
-    { kinds: ["person", "team"], x: 110, title: "PEOPLE" },
-    { kinds: ["service"], x: 400, title: "SERVICES" },
-    { kinds: ["incident"], x: 690, title: "INCIDENTS" },
-    { kinds: ["memory"], x: 960, title: "MEMORY" },
-    { kinds: ["decision"], x: 1230, title: "DECISIONS" },
-  ];
-  const ROW = 40;
-  const positions = new Map<string, { x: number; y: number }>();
-  let height = 160;
-  for (const col of columns) {
-    const items = nodes
-      .filter((n) => col.kinds.includes(n.kind))
-      .sort((a, b) => {
-        if (a.kind === "service") {
-          const rank = (n: Entity) =>
-            n.tier === "edge"
-              ? 0
-              : n.type === "database" || n.type === "index"
-                ? 3
-                : n.type === "external"
-                  ? 4
-                  : 1;
-          return rank(a) - rank(b) || a.name.localeCompare(b.name);
-        }
-        if (a.kind === "memory")
-          return (
-            (a.serviceId ?? "").localeCompare(b.serviceId ?? "") ||
-            a.createdAt - b.createdAt
-          );
-        if (a.kind === "incident")
-          return (
-            (a.id === incident.id ? -1 : 0) - (b.id === incident.id ? -1 : 0) ||
-            b.createdAt - a.createdAt
-          );
-        return (a.name ?? a.title ?? "").localeCompare(b.name ?? b.title ?? "");
-      });
-    items.forEach((n, i) => positions.set(n.id, { x: col.x, y: 70 + i * ROW }));
-    height = Math.max(height, 70 + items.length * ROW + 30);
-  }
-  const width = 1360;
-  const color = (n: Entity) =>
-    n.kind === "service"
-      ? n.type === "database" || n.type === "index"
-        ? "#204e3e"
-        : "#3b7a5c"
-      : n.kind === "person"
-        ? "#5675ca"
-        : n.kind === "team"
-          ? "#7b8fcf"
-          : n.kind === "incident"
-            ? n.id === incident.id
-              ? "#d2553a"
-              : "#c39149"
-            : n.kind === "decision"
-              ? n.status === "rejected"
-                ? "#b65a4a"
-                : "#8a7a4a"
-              : n.category === "semantic"
-                ? "#a088b6"
-                : n.category === "episodic"
-                  ? "#d19d64"
-                  : "#6c9b7e";
   const label = (n: Entity) => {
-    const t = n.name ?? n.number ?? n.title ?? n.id;
+    const t = labelFor(n);
     return t.length > 26 ? `${t.slice(0, 25)}…` : t;
   };
 
@@ -488,168 +428,23 @@ function LiveGraph({
           )}
         </div>
       )}
-      <div
-        className="graph-viewport live"
-        role="region"
-        aria-label="Live incident graph"
-        tabIndex={0}
-      >
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          role="group"
-          aria-label="Incident subgraph"
-        >
-          <defs>
-            <pattern
-              id="dots-live"
-              x="0"
-              y="0"
-              width="18"
-              height="18"
-              patternUnits="userSpaceOnUse"
-            >
-              <circle cx="1" cy="1" r=".8" fill="#d6ddd6" />
-            </pattern>
-            <marker
-              id="arrow-live"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#9fb3a6" />
-            </marker>
-            <marker
-              id="arrow-live-hot"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#d2553a" />
-            </marker>
-            <marker
-              id="arrow-live-seen"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#c39149" />
-            </marker>
-          </defs>
-          <rect width={width} height={height} fill="url(#dots-live)" />
-          {columns.map((c) => (
-            <text
-              key={c.title}
-              x={c.x}
-              y={40}
-              textAnchor="middle"
-              className="graph-category"
-            >
-              {c.title}
-            </text>
-          ))}
-          {edges.map((e, i) => {
-            const a = positions.get(e.from);
-            const b = positions.get(e.to);
-            if (!a || !b) return null;
-            const k = `${e.from}|${e.relation}|${e.to}`;
-            const isHot = hotEdges.has(k);
-            const isSeen = !isHot && seenEdges.has(k);
-            const dx = b.x - a.x;
-            const sameCol = Math.abs(dx) < 1;
-            const x1 = a.x + (dx > 0 ? 66 : dx < 0 ? -66 : 0);
-            const x2 = b.x + (dx > 0 ? -70 : dx < 0 ? 70 : 0);
-            const d = sameCol
-              ? `M${a.x + 66},${a.y} C${a.x + 120},${a.y} ${b.x + 120},${b.y} ${b.x + 66},${b.y}`
-              : `M${x1},${a.y} C${(x1 + x2) / 2},${a.y} ${(x1 + x2) / 2},${b.y} ${x2},${b.y}`;
-            return (
-              <path
-                key={i}
-                d={d}
-                fill="none"
-                className={isHot ? "edge-hot" : ""}
-                stroke={isHot ? "#d2553a" : isSeen ? "#c39149" : "#b7cbbd"}
-                strokeWidth={isHot ? 2.4 : isSeen ? 1.6 : 1}
-                opacity={anyHighlight && !isHot && !isSeen ? 0.15 : 1}
-                markerEnd={
-                  isHot
-                    ? "url(#arrow-live-hot)"
-                    : isSeen
-                      ? "url(#arrow-live-seen)"
-                      : "url(#arrow-live)"
-                }
-              >
-                <title>
-                  {label(byId.get(e.from)!)} {e.relation}{" "}
-                  {label(byId.get(e.to)!)}
-                </title>
-              </path>
-            );
-          })}
-          {nodes.map((n) => {
-            const p = positions.get(n.id);
-            if (!p) return null;
-            const isHot = hot.has(n.id);
-            const isSeen = !isHot && seen.has(n.id);
-            const isPending = pendingTarget === n.id;
-            const isSelf = n.id === incident.id || n.id === incident.serviceId;
-            const superseded = n.status === "superseded";
-            return (
-              <g
-                className={`graph-node ${isPending ? "node-pending" : ""}`}
-                key={n.id}
-                role={n.kind === "memory" ? "button" : undefined}
-                tabIndex={n.kind === "memory" ? 0 : undefined}
-                opacity={
-                  anyHighlight && !isHot && !isSeen && !isSelf && !isPending
-                    ? 0.3
-                    : 1
-                }
-                onClick={() => n.kind === "memory" && select(n)}
-              >
-                <title>
-                  {n.kind}: {n.name ?? n.number ?? n.title}
-                </title>
-                <rect
-                  x={p.x - 66}
-                  y={p.y - 15}
-                  width="132"
-                  height="30"
-                  rx="8"
-                  fill={isSelf ? "#f6efe9" : "#fff"}
-                  stroke={
-                    isPending
-                      ? "#5675ca"
-                      : isHot
-                        ? "#d2553a"
-                        : isSeen
-                          ? "#c39149"
-                          : superseded
-                            ? "#c8bda9"
-                            : isSelf
-                              ? "#d2553a"
-                              : "#dce3db"
-                  }
-                  strokeWidth={isHot || isPending || isSelf ? 2 : 1}
-                  strokeDasharray={superseded ? "4 3" : undefined}
-                />
-                <circle cx={p.x - 52} cy={p.y} r="4.5" fill={color(n)} />
-                <text x={p.x - 42} y={p.y + 4} fontSize="11" fill="#1f2d27">
-                  {label(n)}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
+      <ForceGraph
+        className="live"
+        nodes={nodes}
+        edges={edges}
+        height={440}
+        legend={false}
+        focusId={incident.serviceId}
+        highlight={{
+          hot,
+          seen,
+          hotEdges,
+          seenEdges,
+          pending: pendingTarget || undefined,
+          anchors: new Set([incident.id, incident.serviceId]),
+        }}
+        onSelect={(n) => n.kind === "memory" && select(n)}
+      />
       <div className="live-changes">
         <div className="trace-header">
           <GitBranch size={12} />
@@ -672,6 +467,43 @@ function LiveGraph({
         )}
       </div>
     </div>
+  );
+}
+
+type Theme = "light" | "dark";
+const readTheme = (): Theme => {
+  if (typeof window === "undefined") return "light";
+  const saved = localStorage.getItem("relayops.theme");
+  if (saved === "light" || saved === "dark") return saved;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+};
+const applyTheme = (t: Theme) => {
+  document.documentElement.dataset.theme = t;
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", t === "dark" ? "#0a110e" : "#122d27");
+};
+if (typeof document !== "undefined") applyTheme(readTheme());
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem("relayops.theme", theme);
+  }, [theme]);
+  return (
+    <button
+      className="icon-button theme-toggle"
+      aria-label={
+        theme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+      }
+      title={theme === "dark" ? "Light theme" : "Dark theme"}
+      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+    >
+      {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+    </button>
   );
 }
 
@@ -1178,6 +1010,7 @@ export default function App({
             >
               <CircleHelp size={19} />
             </button>
+            <ThemeToggle />
             <span className="top-avatar">R</span>
           </div>
         </header>
@@ -2474,16 +2307,15 @@ function MemoryGraph({
   memories: Entity[];
   select: (m: Entity) => void;
 }) {
-  const [focus, setFocus] = useState<string | null>(null);
-  const [showWorkflow, setShowWorkflow] = useState(false);
-  const byId = new Map(state.nodes.map((n) => [n.id, n]));
+  const [showOpen, setShowOpen] = useState(false);
+  const [focus, setFocus] = useState<Entity | null>(null);
   const visibleMemory = new Set(memories.map((m) => m.id));
   const WORKFLOW = new Set(["event", "task", "message"]);
   const nodes = state.nodes.filter(
     (n) =>
       !WORKFLOW.has(n.kind) &&
       (n.kind !== "memory" || visibleMemory.has(n.id)) &&
-      (n.kind !== "incident" || n.status === "resolved" || showWorkflow),
+      (n.kind !== "incident" || n.status === "resolved" || showOpen),
   );
   const shown = new Set(nodes.map((n) => n.id));
   const edges = state.edges.filter(
@@ -2492,104 +2324,40 @@ function MemoryGraph({
       shown.has(e.to) &&
       !["HAS_EVENT", "HAS_TASK", "HAS_MESSAGE"].includes(e.relation),
   );
-
-  // Highlight: union of every trace path on the most recent finding/plan events,
-  // or the neighbourhood of a focused node.
+  // Highlight the most recent agent's query paths unless a node is focused.
   const latest = [...state.nodes]
     .filter((n) => n.kind === "event" && n.traces?.length)
     .sort((a, b) => b.createdAt - a.createdAt)[0];
-  const hot = new Set<string>();
-  const hotEdges = new Set<string>();
-  if (focus) {
-    hot.add(focus);
-    for (const e of edges)
-      if (e.from === focus || e.to === focus) {
-        hot.add(e.from);
-        hot.add(e.to);
-        hotEdges.add(`${e.from}|${e.relation}|${e.to}`);
-      }
-  } else if (latest) {
-    for (const t of latest.traces as ToolTrace[]) {
-      for (const id of t.nodeIds) hot.add(id);
-      for (const p of t.paths ?? []) {
-        hot.add(p.from);
-        hot.add(p.to);
-        hotEdges.add(
-          `${p.from}|${p.relation.replace(" (shared)", "")}|${p.to}`,
-        );
+  const highlight = useMemo(() => {
+    const hot = new Set<string>();
+    const hotEdges = new Set<string>();
+    if (focus) {
+      hot.add(focus.id);
+      for (const e of edges)
+        if (e.from === focus.id || e.to === focus.id) {
+          hot.add(e.from);
+          hot.add(e.to);
+          hotEdges.add(`${e.from}|${e.relation}|${e.to}`);
+        }
+    } else if (latest) {
+      for (const t of latest.traces as ToolTrace[]) {
+        for (const p of t.paths ?? []) {
+          hot.add(p.from);
+          hot.add(p.to);
+          hotEdges.add(
+            `${p.from}|${p.relation.replace(" (shared)", "")}|${p.to}`,
+          );
+        }
+        if (["who_knows", "decisions", "memories"].includes(t.tool))
+          t.nodeIds.forEach((id) => hot.add(id));
       }
     }
-    if (latest.incidentId) hot.add(latest.incidentId);
-  }
-
-  // Layered layout by kind: people/teams left, topology centre, incidents/memory/decisions right.
-  const columns: Array<{ kinds: string[]; x: number; title: string }> = [
-    { kinds: ["person"], x: 90, title: "PEOPLE" },
-    { kinds: ["team"], x: 300, title: "TEAMS" },
-    { kinds: ["service"], x: 560, title: "SERVICES" },
-    { kinds: ["incident"], x: 830, title: "INCIDENTS" },
-    { kinds: ["memory"], x: 1080, title: "MEMORY" },
-    { kinds: ["decision"], x: 1330, title: "DECISIONS" },
-  ];
-  const ROW = 44;
-  const positions = new Map<string, { x: number; y: number }>();
-  let height = 120;
-  for (const col of columns) {
-    const items = nodes
-      .filter((n) => col.kinds.includes(n.kind))
-      .sort((a, b) => {
-        if (a.kind === "service") {
-          // keep call order roughly top to bottom: edge, core, data
-          const rank = (n: Entity) =>
-            n.tier === "edge"
-              ? 0
-              : n.type === "database" || n.type === "index"
-                ? 3
-                : n.type === "external"
-                  ? 4
-                  : 1;
-          return rank(a) - rank(b) || a.name.localeCompare(b.name);
-        }
-        if (a.kind === "memory")
-          return (
-            (a.serviceId ?? "").localeCompare(b.serviceId ?? "") ||
-            a.createdAt - b.createdAt
-          );
-        return (a.name ?? a.number ?? a.title ?? "").localeCompare(
-          b.name ?? b.number ?? b.title ?? "",
-        );
-      });
-    items.forEach((n, i) => positions.set(n.id, { x: col.x, y: 70 + i * ROW }));
-    height = Math.max(height, 70 + items.length * ROW + 40);
-  }
-  const width = 1480;
-  const color = (n: Entity) =>
-    n.kind === "service"
-      ? n.type === "database" || n.type === "index"
-        ? "#204e3e"
-        : "#3b7a5c"
-      : n.kind === "person"
-        ? "#5675ca"
-        : n.kind === "team"
-          ? "#7b8fcf"
-          : n.kind === "incident"
-            ? n.status === "resolved"
-              ? "#c39149"
-              : "#d2553a"
-            : n.kind === "decision"
-              ? n.status === "rejected"
-                ? "#b65a4a"
-                : "#8a7a4a"
-              : n.category === "semantic"
-                ? "#a088b6"
-                : n.category === "episodic"
-                  ? "#d19d64"
-                  : "#6c9b7e";
-  const label = (n: Entity) => {
-    const text = n.name ?? n.number ?? n.title ?? n.id;
-    return text.length > 28 ? `${text.slice(0, 27)}…` : text;
-  };
-  const dim = hot.size > 0;
+    return { hot, hotEdges };
+  }, [focus, latest?.id, edges.length]);
+  const kinds = nodes.reduce<Record<string, number>>((acc, n) => {
+    acc[n.kind] = (acc[n.kind] ?? 0) + 1;
+    return acc;
+  }, {});
   return (
     <div className="graph-canvas">
       <div className="graph-title">
@@ -2598,167 +2366,51 @@ function MemoryGraph({
         </span>
         <small>
           {nodes.length} nodes · {edges.length} relationships
-          {latest && !focus ? ` · highlighting ${latest.title}` : ""}
-          {focus ? ` · ${label(byId.get(focus)!)}` : ""}
+          {focus
+            ? ` · ${nodeLabel(focus, focus.id)}`
+            : latest
+              ? ` · highlighting ${latest.title}`
+              : ""}
         </small>
         {focus && (
           <button className="link" onClick={() => setFocus(null)}>
             Clear
           </button>
         )}
+        <label className="graph-toggle">
+          <input
+            type="checkbox"
+            checked={showOpen}
+            onChange={(e) => setShowOpen(e.target.checked)}
+          />
+          <span>Open incidents</span>
+        </label>
       </div>
-      <div
-        className="graph-viewport"
-        role="region"
-        aria-label="Scrollable workspace graph"
-        tabIndex={0}
-      >
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          role="group"
-          aria-label="Workspace knowledge graph"
-        >
-          <defs>
-            <pattern
-              id="dots"
-              x="0"
-              y="0"
-              width="18"
-              height="18"
-              patternUnits="userSpaceOnUse"
-            >
-              <circle cx="1" cy="1" r=".8" fill="#d6ddd6" />
-            </pattern>
-            <marker
-              id="arrow"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#9fb3a6" />
-            </marker>
-            <marker
-              id="arrow-hot"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#d2553a" />
-            </marker>
-          </defs>
-          <rect width={width} height={height} fill="url(#dots)" />
-          {columns.map((c) => (
-            <text
-              key={c.title}
-              x={c.x}
-              y={40}
-              textAnchor="middle"
-              className="graph-category"
-            >
-              {c.title}
-            </text>
-          ))}
-          {edges.map((e, i) => {
-            const a = positions.get(e.from);
-            const b = positions.get(e.to);
-            if (!a || !b) return null;
-            const isHot = hotEdges.has(`${e.from}|${e.relation}|${e.to}`);
-            const dx = b.x - a.x;
-            const sameCol = Math.abs(dx) < 1;
-            const x1 = a.x + (dx > 0 ? 70 : dx < 0 ? -70 : 0);
-            const x2 = b.x + (dx > 0 ? -74 : dx < 0 ? 74 : 0);
-            const d = sameCol
-              ? `M${a.x + 70},${a.y} C${a.x + 130},${a.y} ${b.x + 130},${b.y} ${b.x + 70},${b.y}`
-              : `M${x1},${a.y} C${(x1 + x2) / 2},${a.y} ${(x1 + x2) / 2},${b.y} ${x2},${b.y}`;
-            return (
-              <path
-                key={i}
-                d={d}
-                fill="none"
-                stroke={isHot ? "#d2553a" : "#b7cbbd"}
-                strokeWidth={isHot ? 2.2 : 1}
-                opacity={dim && !isHot ? 0.18 : 1}
-                markerEnd={isHot ? "url(#arrow-hot)" : "url(#arrow)"}
-              >
-                <title>
-                  {label(byId.get(e.from)!)} {e.relation}{" "}
-                  {label(byId.get(e.to)!)}
-                </title>
-              </path>
-            );
-          })}
-          {nodes.map((n) => {
-            const p = positions.get(n.id);
-            if (!p) return null;
-            const isHot = hot.has(n.id);
-            const superseded = n.status === "superseded";
-            return (
-              <g
-                className="graph-node"
-                key={n.id}
-                role="button"
-                tabIndex={0}
-                aria-label={label(n)}
-                opacity={dim && !isHot ? 0.35 : 1}
-                onClick={() =>
-                  n.kind === "memory"
-                    ? select(n)
-                    : setFocus(focus === n.id ? null : n.id)
-                }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    n.kind === "memory" ? select(n) : setFocus(n.id);
-                  }
-                }}
-              >
-                <title>
-                  {n.kind}: {n.name ?? n.number ?? n.title}
-                </title>
-                <rect
-                  x={p.x - 70}
-                  y={p.y - 16}
-                  width="140"
-                  height="32"
-                  rx="9"
-                  fill="#fff"
-                  stroke={
-                    isHot ? "#d2553a" : superseded ? "#c8bda9" : "#dce3db"
-                  }
-                  strokeWidth={isHot ? 2 : 1}
-                  strokeDasharray={superseded ? "4 3" : undefined}
-                />
-                <circle cx={p.x - 56} cy={p.y} r="4.5" fill={color(n)} />
-                <text x={p.x - 46} y={p.y + 4} fontSize="11.5" fill="#1f2d27">
-                  {label(n)}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
+      <ForceGraph
+        nodes={nodes}
+        edges={edges}
+        highlight={highlight}
+        height={600}
+        focusId="service-checkout"
+        onSelect={(n) =>
+          n.kind === "memory"
+            ? select(n)
+            : setFocus(focus?.id === n.id ? null : n)
+        }
+      />
       <div className="graph-instruction">
         <span>
           <LockKeyhole size={12} /> Tenant-isolated graph
         </span>
         <span>
-          Select a service, person, or incident to see its connections ·
-          memories open their source
+          {Object.entries(kinds)
+            .map(([k, v]) => `${v} ${k}${v === 1 ? "" : "s"}`)
+            .join(" · ")}
         </span>
-        <label className="graph-toggle">
-          <input
-            type="checkbox"
-            checked={showWorkflow}
-            onChange={(e) => setShowWorkflow(e.target.checked)}
-          />
-          <span>Include open incidents</span>
-        </label>
+        <span>
+          Drag to move · scroll to zoom · click a node to focus · memories open
+          their source
+        </span>
       </div>
     </div>
   );
