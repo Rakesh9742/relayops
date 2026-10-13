@@ -17,47 +17,70 @@ import {
 } from "./model";
 const randomUUID = () => globalThis.crypto.randomUUID();
 
+/** A monitored signal with its value at incident open and after recovery. */
+export interface Metric {
+  name: string;
+  before: string;
+  after: string;
+  /** Numeric error rate / latency used by the health gate, when applicable. */
+  errorRate?: number;
+  latency?: number;
+}
+export interface Scenario {
+  description: string;
+  metrics: Metric[];
+  /** Health gate after recovery. */
+  healthy: { errorRate: number; latency: number };
+}
 /** Scenario presets: the signals an operator would paste from monitoring. */
-export const SCENARIOS: Record<
-  string,
-  { signals: string[]; description: string }
-> = {
+export const SCENARIOS: Record<string, Scenario> = {
   pool: {
-    signals: [
-      "pool.active = 20 / 20",
-      "http.error_rate = 12.8%",
-      "p95.latency = 2,840 ms",
-    ],
     description:
       "Elevated 5xx responses. Database connection pool reports saturation.",
+    metrics: [
+      { name: "pool.active", before: "20 / 20", after: "17 / 40" },
+      { name: "http.error_rate", before: "12.8%", after: "0.3%" },
+      { name: "p95.latency", before: "2,840 ms", after: "186 ms" },
+    ],
+    healthy: { errorRate: 0.3, latency: 186 },
   },
   worker: {
-    signals: [
-      "pool.active = 20 / 20",
-      "worker.queue_depth = 4,120",
-      "http.error_rate = 9.1%",
-    ],
     description:
       "Elevated 5xx responses. Pool saturated while the background worker queue is growing.",
+    metrics: [
+      { name: "pool.active", before: "20 / 20", after: "9 / 20" },
+      { name: "worker.queue_depth", before: "4,120", after: "38" },
+      { name: "http.error_rate", before: "9.1%", after: "0.2%" },
+    ],
+    healthy: { errorRate: 0.2, latency: 210 },
   },
   cache: {
-    signals: [
-      "cache.evicted_keys = 18,400",
-      "http.error_rate = 6.2%",
-      "sessions.logout_spike = true",
-    ],
     description:
       "Users are being logged out. Cache miss rate climbed sharply in the last ten minutes.",
+    metrics: [
+      { name: "cache.evicted_keys", before: "18,400", after: "0" },
+      { name: "http.error_rate", before: "6.2%", after: "0.4%" },
+      { name: "sessions.logout_spike", before: "true", after: "false" },
+    ],
+    healthy: { errorRate: 0.4, latency: 240 },
   },
   migration: {
-    signals: [
-      "pool.active = 20 / 20",
-      "http.error_rate = 12.8%",
-      "p95.latency = 2,840 ms",
-    ],
     description:
       "Elevated 5xx responses after a deployment. Database connection pool reports saturation.",
+    metrics: [
+      { name: "pool.active", before: "20 / 20", after: "17 / 40" },
+      { name: "http.error_rate", before: "12.8%", after: "0.3%" },
+      { name: "p95.latency", before: "2,840 ms", after: "186 ms" },
+    ],
+    healthy: { errorRate: 0.3, latency: 186 },
   },
+};
+/** `name = value` strings the agents and UI read as live signals. */
+export const signalsOf = (s: Scenario, phase: "before" | "after") =>
+  s.metrics.map((m) => `${m.name} = ${m[phase]}`);
+const numberOf = (s: Scenario, name: string, phase: "before" | "after") => {
+  const v = s.metrics.find((m) => m.name === name)?.[phase];
+  return v ? Number(v.replace(/[^0-9.]/g, "")) : undefined;
 };
 
 export class ConflictError extends Error {
@@ -182,9 +205,10 @@ export class Engine {
       status: "open",
       stage: 0,
       environment: "simulation",
-      signals: preset.signals,
-      errorRate: 12.8,
-      latency: 2840,
+      signals: signalsOf(preset, "before"),
+      metrics: preset.metrics,
+      errorRate: numberOf(preset, "http.error_rate", "before") ?? 12.8,
+      latency: numberOf(preset, "p95.latency", "before") ?? 2840,
       sandbox: {
         database: topology?.database ?? "orders-db",
         pool: 20,
@@ -197,7 +221,7 @@ export class Engine {
       "system",
       "Incident opened",
       incident.description,
-      { type: "alert", evidence: preset.signals },
+      { type: "alert", evidence: signalsOf(preset, "before") },
     );
     const task = this.task(id, 0);
     await this.store.commit(
@@ -493,15 +517,20 @@ export class Engine {
           throw new Error(
             "The database changed. Refresh the shared fact and rebuild the recovery plan.",
           );
+        const scenario = SCENARIOS[incident.scenario] ?? SCENARIOS.pool;
         patch = {
           ...patch,
           sandbox: {
             ...incident.sandbox,
-            pool: incident.plan.targetPool,
+            pool:
+              incident.plan.action === "increase-pool"
+                ? incident.plan.targetPool
+                : incident.sandbox.pool,
             healthy: true,
           },
-          errorRate: 0.3,
-          latency: 186,
+          signals: signalsOf(scenario, "after"),
+          errorRate: scenario.healthy.errorRate,
+          latency: scenario.healthy.latency,
           appliedAt: Date.now(),
         };
         const applied =
@@ -516,6 +545,7 @@ export class Engine {
           { type: "handoff", memoryIds: incident.plan.memoryIds },
         );
       } else {
+        const scenario = SCENARIOS[incident.scenario] ?? SCENARIOS.pool;
         const healthy =
           incident.sandbox.healthy &&
           incident.errorRate < 1 &&
@@ -530,11 +560,17 @@ export class Engine {
         const procedure = incident.plan
           ? await this.store.get(tenant, incident.plan.procedureId)
           : undefined;
+        const deltas = scenario.metrics
+          .map((m) => `${m.name} ${m.before} → ${m.after}`)
+          .join("; ");
+        const diagnostic = (incident.metrics ?? scenario.metrics)
+          .map((m: Metric) => m.name)
+          .filter((n: string) => !SYMPTOM_SIGNALS.has(n));
         const learned = entity(`${id}:memory:outcome`, "memory", {
           category: "episodic",
           status: "active",
           title: `${procedure?.title ?? "Recovery"} verified on ${incident.plan?.target ?? incident.sandbox.database}`,
-          content: `${incident.number}: ${incident.investigation?.rootCauseService ?? incident.service} was the root cause. Applying ${procedure?.id ?? "the plan"} (${incident.plan?.action ?? "recovery"}) reduced simulated errors from 12.8% to 0.3% and p95 latency from 2,840 ms to 186 ms.`,
+          content: `${incident.number}: ${incident.investigation?.rootCauseService ?? incident.service} was the root cause. Applying ${procedure?.id ?? "the plan"} (${incident.plan?.action ?? "recovery"}) in the sandbox moved ${deltas}.`,
           source: `${incident.number} · Echo verification`,
           serviceId: rootCauseId,
           agent: "echo",
@@ -542,9 +578,9 @@ export class Engine {
           incidentId: id,
           // The diagnostic signals that pointed here, so this memory
           // strengthens the same diagnosis next time.
-          signals: (incident.signals ?? [])
-            .map((s: string) => s.split("=")[0].trim())
-            .filter((s: string) => !SYMPTOM_SIGNALS.has(s)),
+          signals: diagnostic,
+          metrics: scenario.metrics,
+          procedureId: procedure?.id,
           action: undefined,
         });
         nodes.push(learned);
@@ -557,21 +593,22 @@ export class Engine {
             nextVersion(procedure, {
               verifiedRuns: (procedure.verifiedRuns ?? 0) + 1,
               lastVerifiedAt: Date.now(),
+              lastVerifiedIncident: incident.number,
             }),
           );
         event = this.event(
           id,
           "echo",
           "Recovery verified. A new memory was saved.",
-          "The simulated service is healthy: error rate 0.3%, p95 latency 186 ms. I saved the outcome and updated the procedure’s verification history for the next incident.",
+          `The simulated service is healthy: ${scenario.metrics.map((m) => `${m.name} ${m.after}`).join(", ")}. I saved the outcome on ${incident.investigation?.rootCauseService ?? incident.service} and updated ${procedure?.id ?? "the procedure"}'s verification history for the next incident.`,
           {
             type: "resolved",
             memoryIds: [learned.id],
             evidence: [
-              "http.error_rate = 0.3%",
-              "p95.latency = 186 ms",
+              ...signalsOf(scenario, "after"),
               "health_check = passed",
             ],
+            metrics: scenario.metrics,
           },
         );
       }

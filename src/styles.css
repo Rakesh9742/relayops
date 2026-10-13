@@ -4436,3 +4436,321 @@ h1 {
     animation: none;
   }
 }
+
+/* Monitored signals strip on the incident */
+.signal-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  padding: 0 28px 18px;
+}
+.signal {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  transition:
+    border-color 0.3s var(--ease),
+    background 0.3s var(--ease);
+}
+.signal code {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+.signal strong {
+  font-family: var(--mono);
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+.signal small {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.signal.bad {
+  border-color: var(--border-warm);
+  background: var(--tint-warm);
+}
+.signal.bad strong {
+  color: var(--danger);
+}
+.signal.ok {
+  border-color: var(--accent-soft);
+  background: var(--tint-accent);
+}
+.signal.ok strong {
+  color: var(--forest);
+}
+@media (max-width: 760px) {
+  .signal-strip {
+    padding: 0 18px 14px;
+  }
+}
+
+/* Memory provenance chips */
+.memory-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 10px 0 2px;
+}
+.memory-facts.compact {
+  margin: 8px 0 0;
+}
+.fact {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.fact {
+  cursor: pointer;
+}
+button.fact:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.fact.svc {
+  color: var(--forest);
+  border-color: var(--accent-soft);
+}
+.fact.inc {
+  color: var(--amber);
+  border-color: var(--border-warm);
+  background: var(--tint-warm);
+}
+.fact.ok {
+  color: var(--forest);
+  background: var(--tint-accent);
+  border-color: var(--accent-soft);
+}
+.fact.warn {
+  color: var(--danger);
+  border-color: var(--border-warm);
+}
+.fact.mono {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+.fact.sig {
+  color: var(--blue);
+  border-color: var(--border-blue);
+  background: var(--tint-blue);
+}
+.memory-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.memory-metrics > div {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.memory-metrics code {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+.memory-metrics span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+.memory-metrics s {
+  color: var(--danger);
+  text-decoration-thickness: 1px;
+}
+.memory-metrics strong {
+  color: var(--forest);
+  font-weight: 500;
+}
+.library-card .memory-facts .fact {
+  font-size: 0.68rem;
+  padding: 2px 7px;
+}
+
+/* Overview: on call now */
+.oncall-panel {
+  display: flex;
+  flex-direction: column;
+}
+.oncall-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.oncall-row:last-child {
+  border-bottom: 0;
+}
+.oncall-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.oncall-row strong {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+.oncall-row strong span {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.oncall-row small {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oncall-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.oncall-handle {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* Overview: latest decision */
+.decision-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 16px;
+  cursor: pointer;
+}
+.decision-card:hover {
+  box-shadow: var(--shadow-lift);
+  border-color: var(--border-strong);
+}
+.decision-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.decision-top > div {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.decision-top strong {
+  font-size: 0.875rem;
+}
+.decision-top span {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+.decision-top > svg {
+  color: var(--text-secondary);
+}
+.decision-card h3 {
+  font-size: 1rem;
+  line-height: 1.35;
+}
+.decision-path {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.8rem;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--tint-warm);
+  border: 1px solid var(--border-warm);
+}
+.decision-path b {
+  font-weight: 500;
+  color: var(--ink);
+}
+.decision-path i {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  color: var(--danger);
+  background: var(--surface);
+  border: 1px solid var(--border-warm);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.decision-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.decision-tools code {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--forest);
+  background: var(--tint-accent);
+  border: 1px solid var(--accent-soft);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.decision-cites {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.decision-cites span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.decision-cites span:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.decision-cites .memory-icon svg {
+  width: 13px;
+  height: 13px;
+}

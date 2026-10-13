@@ -507,6 +507,354 @@ function ThemeToggle() {
   );
 }
 
+/** Provenance chips for a memory: where it sits in the graph and what it has proven. */
+function MemoryFacts({
+  m,
+  state,
+  compact = false,
+  onOpen,
+}: {
+  m: Entity;
+  state: Snapshot;
+  compact?: boolean;
+  onOpen?: (id: string) => void;
+}) {
+  const byId = new Map(state.nodes.map((n) => [n.id, n]));
+  const service = m.serviceId ? byId.get(m.serviceId) : undefined;
+  const learnedFrom = state.edges
+    .filter((e) => e.from === m.id && e.relation === "LEARNED_FROM")
+    .map((e) => byId.get(e.to))
+    .filter(Boolean) as Entity[];
+  const usedBy = state.edges.filter(
+    (e) => e.to === m.id && e.relation === "USES",
+  ).length;
+  const signals: string[] = m.signals ?? (m.signal ? [m.signal] : []);
+  const items: Array<{
+    icon: typeof Box;
+    text: string;
+    cls?: string;
+    onClick?: () => void;
+  }> = [];
+  if (service) items.push({ icon: Box, text: service.name, cls: "svc" });
+  for (const inc of learnedFrom)
+    items.push({
+      icon: History,
+      text: `from ${inc.number}`,
+      cls: "inc",
+      onClick: onOpen ? () => onOpen(inc.id) : undefined,
+    });
+  if (m.verifiedRuns > 0)
+    items.push({
+      icon: ShieldCheck,
+      text: `verified ×${m.verifiedRuns}${m.lastVerifiedIncident ? ` · last ${m.lastVerifiedIncident}` : ""}`,
+      cls: "ok",
+    });
+  if (usedBy > 0 && !compact)
+    items.push({
+      icon: Workflow,
+      text: `used in ${usedBy} plan${usedBy === 1 ? "" : "s"}`,
+    });
+  if (m.database) items.push({ icon: Database, text: m.database, cls: "mono" });
+  for (const sig of signals.slice(0, compact ? 2 : 6))
+    items.push({ icon: Radio, text: sig, cls: "mono sig" });
+  if (m.supersedes)
+    items.push({
+      icon: GitCompareArrows,
+      text: "supersedes v" + (byId.get(m.supersedes)?.version ?? "?"),
+      cls: "warn",
+    });
+  if (!items.length) return null;
+  return (
+    <div className={`memory-facts ${compact ? "compact" : ""}`}>
+      {items.map((it, i) =>
+        it.onClick ? (
+          <button
+            type="button"
+            key={i}
+            className={`fact ${it.cls ?? ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              it.onClick!();
+            }}
+          >
+            <it.icon size={11} />
+            {it.text}
+          </button>
+        ) : (
+          <span key={i} className={`fact ${it.cls ?? ""}`}>
+            <it.icon size={11} />
+            {it.text}
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** Graph-centric headline numbers for the workspace. */
+function OverviewStats({
+  state,
+  active,
+  memories,
+}: {
+  state: Snapshot;
+  active: Entity[];
+  memories: Entity[];
+}) {
+  const nodes = state.nodes;
+  const graphNodes = nodes.filter(
+    (n) => !["event", "task", "message"].includes(n.kind),
+  ).length;
+  const graphEdges = state.edges.filter(
+    (e) => !["HAS_EVENT", "HAS_TASK", "HAS_MESSAGE"].includes(e.relation),
+  ).length;
+  const activeMem = memories.filter((m) => m.status === "active");
+  const byCat = activeMem.reduce<Record<string, number>>((acc, m) => {
+    acc[m.category] = (acc[m.category] ?? 0) + 1;
+    return acc;
+  }, {});
+  const verified = nodes
+    .filter((n) => n.kind === "memory" && n.verifiedRuns > 0)
+    .reduce((sum, n) => sum + n.verifiedRuns, 0);
+  const queries = nodes
+    .filter((n) => n.kind === "event" && n.traces?.length)
+    .reduce((sum, n) => sum + n.traces.length, 0);
+  const working = state.live?.length ?? 0;
+  return (
+    <div className="stats-grid">
+      <Stat
+        label="Open incidents"
+        value={active.length.toString().padStart(2, "0")}
+        icon={Activity}
+        foot={
+          working
+            ? `${working} agent${working === 1 ? "" : "s"} querying the graph now`
+            : active.length
+              ? "Ready for your agent team"
+              : "A clear horizon"
+        }
+        tint="peach"
+        extra={
+          <span className={`tiny-pill ${working ? "" : "neutral"}`}>
+            {working ? <span className="live-dot" /> : <Radio size={11} />}
+            {working ? "Live" : "Idle"}
+          </span>
+        }
+      />
+      <Stat
+        label="Knowledge graph"
+        value={graphNodes.toString()}
+        icon={Network}
+        foot={`${graphEdges} relationships across services, people, and memory`}
+        tint="green"
+        extra={
+          <span className="tiny-pill">
+            <GitBranch size={11} />{" "}
+            {state.backend === "falkordb" ? "FalkorDB" : "Preview"}
+          </span>
+        }
+      />
+      <Stat
+        label="Active memory"
+        value={activeMem.length.toString().padStart(2, "0")}
+        icon={BrainCircuit}
+        foot={`${byCat.episodic ?? 0} episodic · ${byCat.semantic ?? 0} semantic · ${byCat.procedural ?? 0} procedural`}
+        tint="purple"
+        extra={
+          <span className="tiny-pill neutral">
+            <ShieldCheck size={11} /> {verified} verified
+          </span>
+        }
+      />
+      <Stat
+        label="Graph queries by agents"
+        value={queries.toString().padStart(2, "0")}
+        icon={Waypoints}
+        foot="Every answer carries its path"
+        tint="blue"
+        extra={
+          <div className="avatar-stack">
+            {AGENTS.map((a) => (
+              <AgentAvatar key={a.id} id={a.id} />
+            ))}
+          </div>
+        }
+      />
+    </div>
+  );
+}
+
+/** Who is on call for the services currently affected or at risk. */
+function OnCallNow({ state }: { state: Snapshot }) {
+  const byId = new Map(state.nodes.map((n) => [n.id, n]));
+  const open = state.nodes.filter(
+    (n) => n.kind === "incident" && n.status !== "resolved",
+  );
+  // Services in play: affected + identified root causes; else every core service.
+  const inPlay = new Set<string>();
+  for (const i of open) {
+    inPlay.add(i.serviceId);
+    if (i.investigation?.rootCauseServiceId)
+      inPlay.add(i.investigation.rootCauseServiceId);
+  }
+  const scope = inPlay.size
+    ? inPlay
+    : new Set(
+        state.nodes
+          .filter((n) => n.kind === "service" && n.tier === "core")
+          .map((n) => n.id),
+      );
+  const rows: Array<{ person: Entity; services: Entity[] }> = [];
+  for (const e of state.edges) {
+    if (e.relation !== "ON_CALL_FOR" || !scope.has(e.to)) continue;
+    const person = byId.get(e.from);
+    const service = byId.get(e.to);
+    if (!person || !service) continue;
+    const row = rows.find((r) => r.person.id === person.id);
+    if (row) row.services.push(service);
+    else rows.push({ person, services: [service] });
+  }
+  const teamOf = (p: Entity) =>
+    state.edges
+      .filter((e) => e.from === p.id && e.relation === "MEMBER_OF")
+      .map((e) => byId.get(e.to)?.name)
+      .filter(Boolean)[0];
+  return (
+    <section className="context-section" aria-label="On call now">
+      <div className="section-heading">
+        <h2>On call now</h2>
+        <span className="small-label">
+          {inPlay.size ? "for affected services" : "core services"}
+        </span>
+      </div>
+      <div className="panel oncall-panel">
+        {rows.length === 0 && (
+          <p className="live-empty">No on-call rotation found in the graph.</p>
+        )}
+        {rows.map(({ person, services }) => (
+          <div className="oncall-row" key={person.id}>
+            <span
+              className="oncall-avatar"
+              style={{ background: nodeColor(person) }}
+            >
+              {person.name
+                .split(" ")
+                .map((w: string) => w[0])
+                .join("")
+                .slice(0, 2)}
+            </span>
+            <div>
+              <strong>
+                {person.name}
+                <span>{teamOf(person) ?? person.role}</span>
+              </strong>
+              <small>{services.map((s) => s.name).join(", ")}</small>
+            </div>
+            <span className="oncall-handle">@{person.handle}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** The most recent agent conclusion with the graph path that produced it. */
+function LatestDecision({
+  state,
+  open,
+  memoryClick,
+}: {
+  state: Snapshot;
+  open: (id: string) => void;
+  memoryClick: (m: Entity) => void;
+}) {
+  const byId = new Map(state.nodes.map((n) => [n.id, n]));
+  const event = [...state.nodes]
+    .filter(
+      (n) =>
+        n.kind === "event" &&
+        ["finding", "plan", "resolved", "correction"].includes(n.type),
+    )
+    .sort((a, b) => b.createdAt - a.createdAt)[0];
+  if (!event) return null;
+  const incident = byId.get(event.incidentId);
+  const traces: ToolTrace[] = event.traces ?? [];
+  // The path to the root cause, if the finding has one.
+  const rootCause =
+    event.type === "finding" && incident?.investigation?.rootCauseServiceId
+      ? byId.get(incident.investigation.rootCauseServiceId)
+      : undefined;
+  const path =
+    rootCause &&
+    traces
+      .flatMap((t) => t.paths ?? [])
+      .find((p) => p.to === rootCause.id || p.from === rootCause.id);
+  const cited = (event.memoryIds ?? [])
+    .map((id: string) => byId.get(id))
+    .filter(Boolean)
+    .slice(0, 3) as Entity[];
+  return (
+    <section className="context-section" aria-label="Latest agent decision">
+      <div className="section-heading">
+        <h2>Latest decision</h2>
+        <span className="small-label">{relative(event.createdAt)}</span>
+      </div>
+      <button
+        className="panel decision-card"
+        onClick={() => incident && open(incident.id)}
+      >
+        <div className="decision-top">
+          <AgentAvatar id={event.agent} />
+          <div>
+            <strong>{agentBy(event.agent)?.name ?? "RelayOps"}</strong>
+            <span>{incident?.number}</span>
+          </div>
+          <ArrowUpRight size={14} />
+        </div>
+        <h3>{event.title}</h3>
+        {path && (
+          <div className="decision-path">
+            <b>{nodeLabel(byId.get(path.from), path.from)}</b>
+            <i>{path.relation}</i>
+            <b>{nodeLabel(byId.get(path.to), path.to)}</b>
+          </div>
+        )}
+        {traces.length > 0 && (
+          <div className="decision-tools">
+            {traces.map((t, i) => (
+              <code key={i}>{TOOL_LABELS[t.tool] ?? t.tool}</code>
+            ))}
+          </div>
+        )}
+        {cited.length > 0 && (
+          <div className="decision-cites">
+            {cited.map((m) => (
+              <span
+                key={m.id}
+                role="link"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  memoryClick(m);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.stopPropagation();
+                    memoryClick(m);
+                  }
+                }}
+              >
+                <MemoryIcon category={m.category} />
+                {m.title}
+              </span>
+            ))}
+          </div>
+        )}
+      </button>
+    </section>
+  );
+}
+
 function Logo({ small = false }: { small?: boolean }) {
   return (
     <div className={`brand ${small ? "small" : ""}`}>
@@ -1058,71 +1406,11 @@ export default function App({
                     <Plus size={17} /> New incident
                   </button>
                 </div>
-                <div className="stats-grid">
-                  <Stat
-                    label="Open incidents"
-                    value={active.length.toString().padStart(2, "0")}
-                    icon={Activity}
-                    foot={
-                      active.length
-                        ? "Ready for your agent team"
-                        : "A clear horizon"
-                    }
-                    tint="peach"
-                    extra={
-                      <span className="tiny-pill neutral">
-                        <Radio size={11} /> Live
-                      </span>
-                    }
-                  />
-                  <Stat
-                    label="Memories retained"
-                    value={memories
-                      .filter((m) => m.status === "active")
-                      .length.toString()
-                      .padStart(2, "0")}
-                    icon={BrainCircuit}
-                    foot="Context that carries forward"
-                    tint="green"
-                    extra={
-                      <span className="tiny-pill">
-                        <GitBranch size={11} /> Connected
-                      </span>
-                    }
-                  />
-                  <Stat
-                    label="Resolved incidents"
-                    value={incidents
-                      .filter((i) => i.status === "resolved")
-                      .length.toString()
-                      .padStart(2, "0")}
-                    icon={CheckCheck}
-                    foot="Verified recovery outcomes"
-                    tint="blue"
-                    extra={
-                      <span className="tiny-pill neutral">
-                        <Check size={11} /> Verified
-                      </span>
-                    }
-                  />
-                  <Stat
-                    label="Agent handoffs"
-                    value={state.edges
-                      .filter((e) => e.relation === "HANDS_OFF_TO")
-                      .length.toString()
-                      .padStart(2, "0")}
-                    icon={Workflow}
-                    foot="Shared context at every step"
-                    tint="purple"
-                    extra={
-                      <div className="avatar-stack">
-                        {AGENTS.map((a) => (
-                          <AgentAvatar key={a.id} id={a.id} />
-                        ))}
-                      </div>
-                    }
-                  />
-                </div>
+                <OverviewStats
+                  state={state}
+                  active={active}
+                  memories={memories}
+                />
                 <div className="workspace-layout">
                   <div className="main-column">
                     <div className="section-heading">
@@ -1276,25 +1564,12 @@ export default function App({
                         </button>
                       </div>
                     </section>
-                    <div className="context-promo">
-                      <div className="promo-top">
-                        <span className="promo-dot" /> BUILT TO REMEMBER
-                      </div>
-                      <MemoryOrb compact />
-                      <h3>
-                        The next incident
-                        <br />
-                        starts a step ahead.
-                      </h3>
-                      <p>
-                        Every discovery becomes context.
-                        <br />
-                        Every resolution makes your team better.
-                      </p>
-                      <button onClick={() => setModal("guide")}>
-                        See how it works <ArrowUpRight size={14} />
-                      </button>
-                    </div>
+                    <OnCallNow state={state} />
+                    <LatestDecision
+                      state={state}
+                      open={openIncident}
+                      memoryClick={setMemoryDetail}
+                    />
                   </aside>
                 </div>
               </>
@@ -1386,9 +1661,13 @@ export default function App({
           memory={
             state?.nodes.find((n) => n.id === memoryDetail.id) ?? memoryDetail
           }
-          nodes={nodes}
+          state={state!}
           close={() => setMemoryDetail(null)}
           select={setMemoryDetail}
+          openIncident={(id) => {
+            setMemoryDetail(null);
+            openIncident(id);
+          }}
         />
       )}
     </div>
@@ -1606,6 +1885,24 @@ function IncidentPanel({
           </div>
         ))}
       </div>
+      {incident.metrics?.length > 0 && (
+        <div className="signal-strip" aria-label="Monitored signals">
+          {incident.metrics.map((m: any) => {
+            const recovered =
+              incident.status === "resolved" || incident.appliedAt;
+            return (
+              <div
+                className={`signal ${recovered ? "ok" : "bad"}`}
+                key={m.name}
+              >
+                <code>{m.name}</code>
+                <strong>{recovered ? m.after : m.before}</strong>
+                {recovered && <small>was {m.before}</small>}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="incident-tabs">
         <div>
           {[
@@ -2261,6 +2558,7 @@ function MemoryPage({
                 </div>
                 <h3>{m.title}</h3>
                 <p>{m.content}</p>
+                <MemoryFacts m={m} state={state} compact />
                 <footer>
                   <span>
                     {m.status === "superseded"
@@ -2996,17 +3294,35 @@ function SearchModal({
 
 function MemoryModal({
   memory,
-  nodes,
+  state,
   close,
   select,
+  openIncident,
 }: {
   memory: Entity;
-  nodes: Entity[];
+  state: Snapshot;
   close: () => void;
   select: (m: Entity) => void;
+  openIncident?: (id: string) => void;
 }) {
+  const nodes = state.nodes;
   const previous = nodes.find((n) => n.id === memory.supersedes);
   const replacement = nodes.find((n) => n.id === memory.supersededBy);
+  const service = nodes.find((n) => n.id === memory.serviceId);
+  const owners = state.edges
+    .filter((e) => e.to === memory.serviceId && e.relation === "OWNS")
+    .map((e) => nodes.find((n) => n.id === e.from))
+    .filter(Boolean) as Entity[];
+  const onCall = state.edges
+    .filter((e) => e.to === memory.serviceId && e.relation === "ON_CALL_FOR")
+    .map((e) => nodes.find((n) => n.id === e.from))
+    .filter(Boolean) as Entity[];
+  const plans = state.edges
+    .filter((e) => e.to === memory.id && e.relation === "USES")
+    .map((e) => nodes.find((n) => n.id === e.from))
+    .filter(Boolean)
+    .map((t) => nodes.find((n) => n.id === t!.incidentId))
+    .filter(Boolean) as Entity[];
   return (
     <Modal title="A memory, with its context." close={close}>
       <div className="memory-detail">
@@ -3019,6 +3335,21 @@ function MemoryModal({
         </div>
         <h2>{memory.title}</h2>
         <p className="memory-detail-content">{memory.content}</p>
+        <MemoryFacts m={memory} state={state} onOpen={openIncident} />
+        {memory.metrics?.length > 0 && (
+          <div className="memory-metrics">
+            {memory.metrics.map((mt: any) => (
+              <div key={mt.name}>
+                <code>{mt.name}</code>
+                <span>
+                  <s>{mt.before}</s>
+                  <ArrowRight size={11} />
+                  <strong>{mt.after}</strong>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
         <dl>
           <div>
             <dt>Source</dt>
@@ -3043,7 +3374,36 @@ function MemoryModal({
           {memory.verifiedRuns > 0 && (
             <div>
               <dt>Verified recoveries</dt>
-              <dd>{memory.verifiedRuns}</dd>
+              <dd>
+                {memory.verifiedRuns}
+                {memory.lastVerifiedAt
+                  ? ` · last ${relative(memory.lastVerifiedAt)}`
+                  : ""}
+              </dd>
+            </div>
+          )}
+          {service && (
+            <div>
+              <dt>Attached to</dt>
+              <dd>
+                {service.name}
+                {owners.length
+                  ? ` · owned by ${owners.map((o) => o.name).join(", ")}`
+                  : ""}
+                {onCall.length
+                  ? ` · on call: ${onCall.map((o) => o.name).join(", ")}`
+                  : ""}
+              </dd>
+            </div>
+          )}
+          {plans.length > 0 && (
+            <div>
+              <dt>Used in plans for</dt>
+              <dd>
+                {[...new Set(plans.map((p) => p.number))]
+                  .slice(0, 5)
+                  .join(", ")}
+              </dd>
             </div>
           )}
         </dl>
