@@ -178,14 +178,7 @@ Pick two; each is a visible "only a graph does this" moment in the demo.
 ## Day 4 (Oct 18): submission
 
 - [ ] README rewrite: what it is, the three tracks it addresses, architecture diagram (text is fine), honest limits
-- [ ] 3-minute video. Script:
-  1. (0:00) "Agents only know what they can reach. RelayOps puts the whole incident context in a FalkorDB graph." Show the graph view: 50 nodes, people, services, incidents, memory, decisions.
-  2. (0:30) Start the **Hidden neighbour** scenario. Atlas calls `suspects`; expand the trace: the nearest service (orders-db) explains one signal, the worker two hops away explains both. Atlas picks the worker. Show the highlighted path on the graph.
-  3. (1:15) Sage calls `decisions`, finds the rejected restart, proposes RB-11. Approve. Echo verifies and writes an episodic memory onto the worker node; RB-11's `verifiedRuns` increments.
-  4. (1:50) Chat: "Who should I page and what else breaks if orders-db goes down?" Show the `who_knows` and `blast_radius` traces.
-  5. (2:15) Memory correction: introduce migration evidence, show SUPERSEDES edge, plan invalidated, resume, rebuilt.
-  6. (2:40) Switch to Orbit Financial: separate FalkorDB graph, nothing leaks. Show `relayops_acme` and `relayops_orbit` in FalkorDB Browser.
-  7. (2:55) "Every answer carries its path. Every decision is on the graph."
+- [x] 3-minute video script: see `docs/video-script.md`
 - [ ] Blog post (side prize): "Why our incident agents stopped guessing: putting signals, people, and decisions on one graph." Use the worker-vs-db example as the hook.
 - [ ] Submit to all three tracks with a sentence each:
   - Track 1: agents choose actions from graph tool results (suspects, blast radius, decisions)

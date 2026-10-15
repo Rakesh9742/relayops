@@ -15,7 +15,7 @@ Built for [Graph Hacks: Context for AI Agents](https://www.wemakedevs.org/hackat
 
 - Repository: https://github.com/Rakesh9742/relayops
 - Live demo: _(add URL after deploy)_
-- Video: _(add URL)_
+- Video: _(add URL)_ · script in [`docs/video-script.md`](docs/video-script.md)
 
 ## Why a graph
 
