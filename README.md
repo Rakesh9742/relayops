@@ -13,7 +13,7 @@ Built for [Graph Hacks: Context for AI Agents](https://www.wemakedevs.org/hackat
 (Oct 15–18, 2026). Tracks entered: **Agents That Act on Connected Data**,
 **Agent Memory and Coordination**, **Company Brain**.
 
-- Repository: _(add URL after push)_
+- Repository: https://github.com/Rakesh9742/relayops
 - Live demo: _(add URL after deploy)_
 - Video: _(add URL)_
 
@@ -127,7 +127,7 @@ All data is synthetic. Companies, people, services, and incidents are invented.
 Requirements: Docker, Node.js 22.13+ (24 recommended).
 
 ```sh
-git clone <repo> relayops && cd relayops
+git clone https://github.com/Rakesh9742/relayops.git && cd relayops
 npm install
 cp .env.example .env            # defaults point at the compose FalkorDB
 docker compose up -d            # FalkorDB on 127.0.0.1:6387, browser UI on :3017
