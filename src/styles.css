@@ -4754,3 +4754,47 @@ button.fact:hover {
   width: 13px;
   height: 13px;
 }
+
+/* Overview: critical services */
+.critical-panel {
+  display: flex;
+  flex-direction: column;
+}
+.critical-row {
+  display: grid;
+  grid-template-columns: 10px 1fr 80px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.critical-row:last-child {
+  border-bottom: 0;
+}
+.critical-row i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.critical-row strong {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+.critical-row small {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.critical-bar {
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.critical-bar b {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.4s var(--ease);
+}

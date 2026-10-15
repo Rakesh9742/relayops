@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SQLiteStore } from "../server/store";
+import { SQLiteStore, IndexedGraph } from "./doubles";
 import { seed } from "../server/seed";
 import { Engine } from "../server/engine";
 
 async function fixture() {
   const store = new SQLiteStore(":memory:");
   await seed(store);
-  const engine = new Engine(store, 0, false);
+  const engine = new Engine(store, new IndexedGraph(store), 0, false);
   const incident = await engine.create("acme", {
     title: "Checkout service errors",
     description: "Test incident",
@@ -87,7 +87,7 @@ test("a worker-queue signal steers the investigation to a different root cause a
   const store = new SQLiteStore(":memory:");
   try {
     await seed(store);
-    const engine = new Engine(store, 0, false);
+    const engine = new Engine(store, new IndexedGraph(store), 0, false);
     const incident = await engine.create("acme", {
       title: "Checkout errors with worker backlog",
       description: "",
@@ -181,7 +181,7 @@ test("paused incident and conversation survive closing and reopening the databas
   let store = new SQLiteStore(path);
   try {
     await seed(store);
-    let engine = new Engine(store, 0, false);
+    let engine = new Engine(store, new IndexedGraph(store), 0, false);
     const incident = await engine.create("acme", {
       title: "Persistent incident test",
       description: "Restart this process",
@@ -194,7 +194,7 @@ test("paused incident and conversation survive closing and reopening the databas
     await engine.message("acme", incident.id, "Remember this conversation");
     await store.close();
     store = new SQLiteStore(path);
-    engine = new Engine(store, 0, false);
+    engine = new Engine(store, new IndexedGraph(store), 0, false);
     assert.equal((await store.get("acme", incident.id))?.status, "paused");
     assert.equal(
       (await store.all("acme")).filter((n) => n.kind === "message").length,
@@ -270,7 +270,7 @@ test(
       await store.reset("acme");
       await store.reset("orbit");
       await seed(store);
-      const engine = new Engine(store, 0, false, undefined, graph);
+      const engine = new Engine(store, graph, 0, false);
       const incident = await engine.create("acme", {
         title: "FalkorDB integration incident",
         description: "Graph-backed integration test",
@@ -317,7 +317,13 @@ test(
       assert.ok(found.some((f) => f.node.id === "mem-playbook"));
       const critical = await graph.criticalServices("acme");
       assert.ok(critical.length > 0);
-      assert.ok(critical.slice(0, 3).some((c) => ["service-checkout", "service-gateway"].includes(c.node.id)));
+      assert.ok(
+        critical
+          .slice(0, 3)
+          .some((c) =>
+            ["service-checkout", "service-gateway"].includes(c.node.id),
+          ),
+      );
       const stats = await store.stats("acme");
       assert.ok(stats.nodes > 50 && stats.edges > 100);
       assert.equal(stats.graph, "relayops_test_engine_acme");

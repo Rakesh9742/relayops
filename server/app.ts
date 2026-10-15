@@ -64,12 +64,11 @@ export function createApp(
     next();
   });
   app.get("/api/health", async (_req, res) => {
-    const graphs =
-      store.backend === "falkordb"
-        ? await Promise.all(
-            WORKSPACES.map((w) => (store as any).stats(w.id)),
-          ).catch(() => undefined)
-        : undefined;
+    const graphs = store.stats
+      ? await Promise.all(WORKSPACES.map((w) => store.stats!(w.id))).catch(
+          () => undefined,
+        )
+      : undefined;
     res.json({ ok: true, backend: store.backend, graphs });
   });
   app.post("/api/session", (req, res) => {
@@ -139,10 +138,13 @@ export function createApp(
       modelInfo: engine.modelInfo,
       serverStartedAt: options.startedAt ?? 0,
       live: engine.live(tenant),
-      graphStats:
-        store.backend === "falkordb"
-          ? await (store as any).stats(tenant).catch(() => undefined)
-          : undefined,
+      graphStats: store.stats
+        ? await store.stats(tenant).catch(() => undefined)
+        : undefined,
+      critical: await engine.graph
+        .criticalServices(tenant, 5)
+        .then((rows) => rows.map((r) => ({ id: r.node.id, score: r.score })))
+        .catch(() => []),
     });
   });
   app.post("/api/model/check", async (_req, res) => {
@@ -201,6 +203,13 @@ export function createApp(
               ? await g.whoKnows(tenant, serviceId)
               : await g.decisions(tenant, serviceId);
     res.json(result);
+  });
+  app.get("/api/graph/critical", async (_req, res) => {
+    res.json(await engine.graph.criticalServices(res.locals.session.tenant));
+  });
+  app.get("/api/graph/search", async (req, res) => {
+    const q = z.string().trim().min(2).max(120).parse(req.query.q);
+    res.json(await engine.graph.searchMemory(res.locals.session.tenant, q));
   });
   app.get("/api/graph/path", async (req, res) => {
     const from = nodeId.parse(req.query.from);

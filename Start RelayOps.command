@@ -14,6 +14,11 @@ if [[ ! -d node_modules ]]; then
   npm ci
 fi
 
+if ! docker compose ps --status running 2>/dev/null | grep -q falkordb; then
+  print "Starting FalkorDB..."
+  docker compose up -d
+fi
+
 print "Building RelayOps..."
 npm run build
 print ""

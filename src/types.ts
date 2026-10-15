@@ -81,11 +81,14 @@ export interface Snapshot {
   workspaces: Workspace[];
   nodes: Entity[];
   edges: Edge[];
-  backend: "sqlite" | "falkordb" | "browser";
+  backend: "falkordb";
   model: ModelInfo["provider"];
   modelInfo: ModelInfo;
   serverStartedAt: number;
   live?: LiveActivity[];
+  graphStats?: { graph: string; nodes: number; edges: number };
+  /** Services ranked by betweenness centrality over the call graph. */
+  critical?: Array<{ id: string; score: number }>;
 }
 
 /** One hop in a graph path, used to show the reasoning behind an answer. */

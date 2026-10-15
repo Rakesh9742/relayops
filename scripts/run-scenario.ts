@@ -2,6 +2,7 @@
  * Drive one scenario end to end against a running server and print what the
  * agents did. Usage:
  *   node --import tsx scripts/run-scenario.ts worker [http://127.0.0.1:5177] [--migrate]
+ * Set DEMO_ACCESS_CODE when the server requires one.
  */
 const scenario = process.argv[2] ?? "pool";
 const base =
@@ -45,7 +46,10 @@ const waitFor = async (id: string, statuses: string[], timeoutMs = 120000) => {
   throw new Error(`Timed out waiting for ${statuses.join("/")}`);
 };
 
-await call("/api/session", { method: "POST", body: "{}" });
+await call("/api/session", {
+  method: "POST",
+  body: JSON.stringify({ code: process.env.DEMO_ACCESS_CODE ?? "" }),
+});
 const titles: Record<string, string> = {
   pool: "Checkout API is returning elevated errors",
   worker: "Checkout errors while a background queue grows",

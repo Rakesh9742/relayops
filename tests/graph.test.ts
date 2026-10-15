@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SQLiteStore } from "../server/store";
+import { SQLiteStore, IndexedGraph } from "./doubles";
 import { seed, buildWorkspaceGraph, WORKSPACES } from "../server/seed";
-import { IndexedGraph, type GraphTools } from "../server/graph";
+import type { GraphTools } from "../server/graph";
 import type { Store } from "../server/store";
 
 /**

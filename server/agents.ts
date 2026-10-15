@@ -74,6 +74,18 @@ export const GRAPH_TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "search_memory",
+    description:
+      "Full-text search across all active memory in the workspace (titles and content). Use when the question mentions a topic, symptom, or term rather than a specific service.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Words to search for" },
+      },
+      required: ["text"],
+    },
+  },
+  {
     name: "path",
     description:
       "Shortest directed path between two node ids, following any relation.",
@@ -321,6 +333,20 @@ export class ToolRunner {
           list.map((m) => m.id),
         );
         return JSON.stringify(list.map(brief));
+      }
+      case "search_memory": {
+        const hits = await this.graph.searchMemory(
+          this.tenant,
+          String(call.args.text ?? ""),
+        );
+        this.record(
+          call,
+          `${hits.length} memories match`,
+          hits.map((h) => h.node.id),
+        );
+        return JSON.stringify(
+          hits.map((h) => ({ score: h.score, ...brief(h.node) })),
+        );
       }
       case "path": {
         const from =
@@ -665,7 +691,7 @@ export async function answer(
     return { text: fallback, traces: [] };
   const run = await client.runTools(
     SYSTEM.replace("{agent}", "Atlas") +
-      ` Answer the operator's question. Use tools when the answer depends on relationships (who, what depends on what, what happened before). Tools accept node ids (service-db) or exact service names (orders-db). Reply in under 100 words with ids cited. Do not call finish; just answer in text.`,
+      ` Answer the operator's question. If it is about a topic, symptom, or term (not a specific service), call search_memory FIRST with the key nouns; it searches every memory in the workspace. Use the other tools when the answer depends on relationships (who, what depends on what, what happened before). Tools accept node ids (service-db) or exact service names (orders-db). Reply in under 100 words with ids cited. Do not call finish; just answer in text.`,
     JSON.stringify({
       incident: {
         id: incident.id,

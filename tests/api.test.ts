@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { Express } from "express";
-import { SQLiteStore } from "../server/store";
+import { SQLiteStore, IndexedGraph } from "./doubles";
 import { seed } from "../server/seed";
 import { Engine } from "../server/engine";
 import { createApp } from "../server/app";
@@ -58,9 +58,13 @@ function request(
 test("API enforces session, membership, tenant scope, origin, and input validation", async () => {
   const store = new SQLiteStore(":memory:");
   await seed(store);
-  const app = createApp(store, new Engine(store, 0, false), {
-    secret: "test-session-secret",
-  });
+  const app = createApp(
+    store,
+    new Engine(store, new IndexedGraph(store), 0, false),
+    {
+      secret: "test-session-secret",
+    },
+  );
   try {
     assert.equal((await request(app, "/api/state")).status, 401);
     const login = await request(app, "/api/session", {
@@ -132,10 +136,14 @@ test("API enforces session, membership, tenant scope, origin, and input validati
 test("a hosted demo access code is required and is not disclosed by API responses", async () => {
   const store = new SQLiteStore(":memory:");
   await seed(store);
-  const app = createApp(store, new Engine(store, 0, false), {
-    secret: "test-session-secret",
-    accessCode: "sample-demo-code",
-  });
+  const app = createApp(
+    store,
+    new Engine(store, new IndexedGraph(store), 0, false),
+    {
+      secret: "test-session-secret",
+      accessCode: "sample-demo-code",
+    },
+  );
   try {
     const denied = await request(app, "/api/session", {
       method: "POST",
@@ -160,7 +168,7 @@ test("a hosted demo access code is required and is not disclosed by API response
 test("model status and connection checks require a session and never return the API key", async (t) => {
   const store = new SQLiteStore(":memory:");
   await seed(store);
-  const engine = new Engine(store, 0, true, {
+  const engine = new Engine(store, new IndexedGraph(store), 0, true, {
     provider: "openai",
     key: "test-secret-key",
     model: "gpt-5.4-mini",

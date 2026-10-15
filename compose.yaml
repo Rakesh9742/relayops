@@ -1,3 +1,5 @@
+# One command: docker compose up -d
+# App on http://127.0.0.1:4177, FalkorDB Browser on http://127.0.0.1:3017
 services:
   falkordb:
     image: falkordb/falkordb:latest
@@ -13,5 +15,26 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+  app:
+    build: .
+    profiles: ["app"]
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4177:4177"
+    environment:
+      MEMORY_BACKEND: falkordb
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+      HOST: 0.0.0.0
+      PORT: "4177"
+      # Required when HOST is not loopback. Anyone with the code can view both sample workspaces.
+      DEMO_ACCESS_CODE: ${DEMO_ACCESS_CODE:-graphhacks}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-auto}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
 volumes:
   relayops_memory:

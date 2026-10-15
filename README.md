@@ -1,150 +1,239 @@
 # RelayOps
 
-**A team that remembers.** A premium incident workspace where Atlas investigates, Sage prepares and applies approved sandbox recovery plans, and Echo verifies the result. Their shared memory survives sessions and keeps the evidence behind each decision.
+**Incident agents that work from a graph, not a guess.**
 
-## Run locally
+Three agents (Atlas investigates, Sage plans, Echo verifies) handle a
+production incident by querying a FalkorDB graph of services, their
+dependencies, the people who own and operate them, past incidents, what was
+learned from each, and the engineering decisions already made. Every
+conclusion carries the graph path that produced it. Every resolution writes
+back into the graph so the next incident starts further ahead.
 
-On this Mac, double-click **`Start RelayOps.command`** in Finder. It builds the app and starts the UI and API together at **http://127.0.0.1:5177**, without development file watchers. Keep its Terminal window open while using RelayOps. You can also run it from Terminal:
+Built for [Graph Hacks: Context for AI Agents](https://www.wemakedevs.org/hackathons/falkordb)
+(Oct 15–18, 2026). Tracks entered: **Agents That Act on Connected Data**,
+**Agent Memory and Coordination**, **Company Brain**.
 
-```sh
-cd /Users/rakesh/relayops
-./"Start RelayOps.command"
+- Repository: _(add URL after push)_
+- Live demo: _(add URL after deploy)_
+- Video: _(add URL)_
+
+## Why a graph
+
+The hard part of an incident is not the symptom, it is what the symptom is
+connected to. "Checkout is returning errors and the database pool is full" has
+at least two explanations: the database, or a background worker two hops away
+that shares the database's connections. The nearer suspect is wrong. An agent
+can only tell the difference if it can follow `checkout-api -DEPENDS_ON->
+orders-db <-DEPENDS_ON- notification-worker -HAS_MEMORY-> "a stuck retry loop
+held 14 connections"` and compare that memory's signals against what is live.
+
+RelayOps puts all of that in FalkorDB and gives the agents seven read-only
+graph tools. The model chooses which to call; the graph decides what is true.
+
+## What the graph does
+
+| Question | Tool | Traversal |
+|---|---|---|
+| What upstream could cause this? | `suspects` | `DEPENDS_ON\|ROUTES_TO*1..2` plus siblings sharing a dependency, each with `ROOT_CAUSE` history and active memory |
+| What breaks if X fails? | `blast_radius` | reverse `DEPENDS_ON\|ROUTES_TO*1..3` |
+| Has this happened before? Who fixed it? | `similar_incidents` | incidents on the service or its upstream, with `ROOT_CAUSE`, `RESOLVED`, `LEARNED_FROM` |
+| What has engineering already decided? | `decisions` | `Decision -ABOUT-> Service` in scope, including rejections that forbid actions |
+| Who should I page? | `who_knows` | `ON_CALL_FOR`, `MEMBER_OF -> OWNS`, `RESOLVED` |
+| Anything in memory about *topic*? | `search_memory` | full-text index on `Memory.title, Memory.content` |
+| How are these two things connected? | `path` | `shortestPath` |
+| Which services matter most? | overview | `algo.betweenness` on the call graph |
+
+The full Cypher for each is in [`docs/queries.md`](docs/queries.md).
+
+The agents' writes are graph writes too: `(:Incident)-[:ROOT_CAUSE]->(:Service)`,
+`(:Service)-[:HAS_MEMORY]->(:Memory)-[:LEARNED_FROM]->(:Incident)`,
+`(:Memory)-[:SUPERSEDES]->(:Memory)`, `(:Task)-[:USES]->(:Memory)`,
+`(:Task)-[:BASED_ON]->(:Decision)`, `(:Task)-[:HANDS_OFF_TO]->(:Task)`. All
+multi-entity writes go through one guarded Cypher query so concurrent workers
+cannot double-apply a recovery and a plan built on superseded memory cannot be
+approved.
+
+**There is no non-graph mode.** If FalkorDB is unreachable the server refuses
+to start. The in-memory graph walk in `tests/doubles.ts` exists only to prove
+the Cypher gives the same answers as a plain traversal.
+
+## Graph data model
+
+One graph per workspace: `relayops_acme`, `relayops_orbit`. Nothing crosses
+graphs; a session is bound to one.
+
+### Nodes
+
+| Label | Key properties | Count (seed) |
+|---|---|---|
+| `Service` | `id, name, type (api/database/cache/gateway/worker/index/external), tier, environment` | 14 |
+| `Team` | `id, name, focus` | 4 |
+| `Person` | `id, name, handle, role, skills[]` | 8 |
+| `Incident` | `id, number, title, severity, status, serviceId, scenario, signals[], metrics[], investigation{}, plan{}` | 6 history + live |
+| `Memory` | `id, category (episodic/semantic/procedural), title, content, status (active/superseded), serviceId, signals[], database, action, steps[], verifiedRuns, metrics[]` | 15 |
+| `Decision` | `id, title, rationale, status (accepted/rejected), forbids, constraint{}` | 4 |
+| `Task` | `id, incidentId, stage, agent, status, leaseUntil, claim, version` | per incident |
+| `Event` | `id, incidentId, agent, type, title, content, traces[]` | per incident |
+| `Message` | `id, incidentId, role, content, traces[]` | per incident |
+
+Every node also carries `version` (optimistic concurrency) and `payload`
+(the full entity as JSON, so the UI gets exactly what the engine wrote).
+
+### Relationships
+
+```
+(:Service)-[:DEPENDS_ON]->(:Service)      call graph
+(:Service)-[:ROUTES_TO]->(:Service)       gateway fan-out
+(:Team)-[:OWNS]->(:Service)
+(:Person)-[:MEMBER_OF]->(:Team)
+(:Person)-[:ON_CALL_FOR]->(:Service)
+(:Person)-[:RESOLVED]->(:Incident)
+(:Incident)-[:AFFECTS]->(:Service)        where the symptom appeared
+(:Incident)-[:ROOT_CAUSE]->(:Service)     where the cause was (written by Atlas)
+(:Incident)-[:SIMILAR_TO]->(:Incident)
+(:Service)-[:HAS_MEMORY]->(:Memory)
+(:Memory)-[:LEARNED_FROM]->(:Incident)
+(:Memory)-[:SUPERSEDES]->(:Memory)        correction keeps history
+(:Decision)-[:ABOUT]->(:Service)
+(:Decision)-[:MADE_BY]->(:Person)
+(:Decision)-[:BASED_ON]->(:Incident|:Memory)
+(:Incident)-[:HAS_EVENT|HAS_TASK|HAS_MESSAGE]->(...)
+(:Task)-[:HANDS_OFF_TO]->(:Task)
+(:Task)-[:USES]->(:Memory)
+(:Task)-[:BASED_ON]->(:Decision)
 ```
 
-To try the interface immediately, open **`preview.html`** in Chrome or Safari. This is a standalone interactive browser demo: it uses the same agent workflow with a browser-local sample store, requires no server or API key, and saves progress on this device. Use one tab at a time; its local workspace separation is not a security boundary. The normal app below uses authenticated server routes and SQLite or FalkorDB.
+### Seed topology (per workspace)
 
-Node.js 22.13 or newer is required (Node 24 recommended for built-in SQLite).
+```
+storefront-web -> api-gateway -> checkout-api -> orders-db <- notification-worker -> email-provider
+                             |              \-> session-cache
+                             |              \-> inventory-api -> inventory-db, session-cache
+                             |              \-> payments-api -> payments-db, fraud-service
+                             \-> search-api -> search-index
+```
+
+Six resolved incidents give the graph history: pool exhaustion (orders-db),
+worker starving the database (notification-worker), dropped index
+(inventory-db), eviction storm (session-cache), fraud latency propagating to
+checkout (fraud-service), and a reindex that affected only search. Four
+decisions include one **rejected** ("automatic restart on pool exhaustion"),
+which Sage reads and refuses to propose.
+
+All data is synthetic. Companies, people, services, and incidents are invented.
+
+## Run it
+
+Requirements: Docker, Node.js 22.13+ (24 recommended).
 
 ```sh
+git clone <repo> relayops && cd relayops
 npm install
-cp .env.example .env
-npm run dev
+cp .env.example .env            # defaults point at the compose FalkorDB
+docker compose up -d            # FalkorDB on 127.0.0.1:6387, browser UI on :3017
+npm run build && npm start      # http://127.0.0.1:4177
 ```
 
-Open **http://127.0.0.1:5177**. The API uses port 4177. Local preview uses SQLite at `.data/relayops.db`, with no API key required. Do not delete `.data` if you want to keep memory and sessions.
-
-```sh
-npm run build
-npm start
-```
-
-After building, the API also serves the app at **http://127.0.0.1:4177**.
-
-`ERR_CONNECTION_REFUSED` means nothing is accepting the connection at that address. Start one of the commands above before opening its matching URL, and leave it running. If `npm run dev` fails with `EMFILE: too many open files, watch`, use the Mac launcher or `npm run build` followed by `npm start`; those do not use development watchers. A standalone `preview.html` does not start a localhost server.
-
-## What works
-
-- A workspace graph per tenant: 14 services with real dependencies, 4 teams, 8 people (ownership, on-call, who resolved what), 6 past incidents with root causes, 13 memories (episodic, semantic, procedural), and 4 engineering decisions including a rejected one.
-- Agents ask the graph questions through read-only tools: `suspects`, `similar_incidents`, `blast_radius`, `who_knows`, `decisions`, `memories`, `path`. Every call is recorded with the path behind the answer and shown on the timeline.
-- With an API key, the model chooses which tools to call (OpenAI Responses or Anthropic Messages tool use, bounded to six rounds). Without one, a deterministic policy runs the same tools so the trace is still real.
-- Four scenarios. **Hidden neighbour** has the same symptom as pool exhaustion but a second signal that only a service two hops away explains; Atlas must rule out the nearer suspect.
-- Sage picks a procedure from the root cause's memory, checks decisions, and refuses actions a rejected decision forbids. Plans cite exact memory versions and are invalidated if any cited memory is superseded.
-- Echo writes the verified outcome onto the root cause service and increments the runbook's verification count.
-- Three named specialists with durable task claims, version checks, expiring leases, and saved handoffs.
-- Memory correction: preserve the original fact, create a replacement with a `SUPERSEDES` edge, invalidate the current plan, and resume using the current endpoint.
-- Operator chat that queries the graph: "who should I page", "what breaks if orders-db goes down".
-- A data-driven graph view of every node and relationship with the latest agent's query paths highlighted.
-- Two sample workspaces with server-authenticated scope, tenant-scoped export, and an in-app demo playbook.
-
-See `docs/event-plan.md` for the FalkorDB implementation planned for the event window.
-
-## Use FalkorDB
-
-FalkorDB is the intended primary store. SQLite is explicitly a local preview and does **not** satisfy the hackathon's FalkorDB requirement.
-
-```sh
-docker compose up -d
-npm install falkordb
-```
-
-Change `.env`:
+Without an API key the agents run a deterministic policy over the same graph
+tools, so every trace is still a real query. To let the model choose the
+tools:
 
 ```dotenv
-MEMORY_BACKEND=falkordb
-FALKORDB_HOST=127.0.0.1
-FALKORDB_PORT=6387
-```
-
-Restart the API. Each tenant gets its own graph (`relayops_acme`, `relayops_orbit`). Nodes, relationships, tasks, conversations, and memory are written to FalkorDB; the adapter is not a secondary visualization mirror. Context retrieval uses a Cypher traversal, and multi-entity state transitions use one guarded Cypher query. Request bodies cannot select arbitrary tenant graphs.
-
-The optional SDK is dynamically imported only in FalkorDB mode. Failure to connect stops startup instead of silently switching stores. The Compose volume persists database files; AOF uses `everysec`, which is not a zero-data-loss durability guarantee. For a submission, pin the tested database image digest and SDK version after running the integration suite in your own environment.
-
-## Connect OpenAI
-
-Create a project API key in your OpenAI account and add it to the local `.env` file. A ChatGPT or Codex login is not an API key for this app. Do not paste the key into chat, browser storage, or a `VITE_*` variable.
-
-```dotenv
-MODEL_PROVIDER=auto
-OPENAI_API_KEY=your_key
+MODEL_PROVIDER=openai
+OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-5.4-mini
 ```
 
-Restart the server, open **Settings & connections**, then select **Test AI connection**. This sends one short request without incident data. The UI distinguishes an untested configuration, a successful request, and a failed request. Each check uses the configured provider's API. The standalone `preview.html` always remains in simulation mode.
+(or `MODEL_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`). Restart, then **Settings
+→ Test AI connection**.
 
-The default OpenAI model is GPT-5.4 mini. Set `OPENAI_MODEL` to another Responses-compatible model available to your project if needed. Requests use the [Responses API](https://developers.openai.com/api/docs/guides/text), a 25-second timeout, and `store: false`. RelayOps stores its own conversations; `store: false` does not mean the provider has no abuse-monitoring retention. See the [API data controls](https://developers.openai.com/api/docs/guides/your-data).
+Development with hot reload: `npm run dev` (UI on :5177, API on :4177).
 
-`MODEL_PROVIDER=auto` prefers OpenAI, then Anthropic, and uses simulation when no key exists. To select Claude explicitly, set `MODEL_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, and optionally `ANTHROPIC_MODEL` (default `claude-sonnet-4-5`). An explicitly selected provider with a missing key stops startup with setup instructions. `MODEL_PROVIDER=simulation` disables calls even if keys exist. A failed configured provider never silently switches provider or returns a simulated answer.
+### Try it in three minutes
 
-Without a key, this is a **deterministic multi-agent workflow simulation**, not an LLM-powered autonomous incident responder. With a key, the model generates evidence-grounded explanations and conversation answers; task routing, tool selection, and recovery remain constrained to the demonstrated scenario. The model cannot run shell commands or mutate production infrastructure. Model failures pause workflow progress with an actionable error and can be retried from the saved checkpoint. Current memory takes priority over older conversation text. Only the incident's workspace evidence and up to 12 recent conversation messages (2,000 characters per message) are sent; no other incident or tenant's conversation is included.
+1. **Shared memory → Graph view.** Drag, zoom, hover. People left, services
+   centre, memory and decisions right. This is the FalkorDB graph.
+2. **New incident → Hidden neighbour → Start.** The panel switches to **Live
+   graph**. Watch Atlas call `suspects`: orders-db explains one signal,
+   notification-worker (two hops, sharing the database) explains two. Atlas
+   picks the worker and names who to page.
+3. Sage calls `decisions`, finds the rejected restart, proposes the worker
+   drain runbook. The plan card says what it will not do. **Approve.**
+4. Echo verifies: the signal strip turns green with real deltas, an episodic
+   memory lands on the worker node, the runbook's verified count increments.
+5. **Conversation:** "Who should I page and what else breaks if orders-db goes
+   down?" The answer shows its `who_knows` and `blast_radius` queries.
+6. **New incident → Memory correction.** At the approval step click
+   **Introduce new evidence**. The fact is superseded (`SUPERSEDES` edge), the
+   plan is invalidated, approve is refused, resume rebuilds it.
+7. Switch to **Orbit Financial**: a different FalkorDB graph, different people,
+   nothing from Acme.
+
+Open the FalkorDB Browser (http://127.0.0.1:3017) and run
+`MATCH (i:Incident)-[:ROOT_CAUSE]->(s) RETURN i.number, s.name` to see what the
+agents wrote.
 
 ## Test
 
 ```sh
-npm test
-npm run build
-npm run test:browser
-npm run benchmark
+npm test                 # 30 unit tests on the in-memory double, no DB needed
+npm run test:falkordb    # the same suite plus integration on a live FalkorDB (31 tests)
+npm run test:browser     # Playwright end to end against a running server
+npm run benchmark        # guarded-write throughput against FalkorDB
 ```
 
-The core suite checks the complete workflow, exactly one winner among competing claim requests, tenant boundaries, immutable memory history, stale-plan invalidation, persisted conversation and resume after opening a new store connection, expired-lease reclaim, and session/origin/input checks.
+`tests/graph.test.ts` runs identical assertions against the in-memory walk and
+against FalkorDB, so a Cypher regression fails the suite.
 
-API tests inject Node request/response objects into Express without opening a listening socket. They test middleware and routes, not network transport. Rebuild the standalone demo after changes with `npm run build:demo`.
+## Architecture
 
-Install a browser if needed:
-
-```sh
-npx playwright install chromium
+```
+src/            React 19 + Vite UI. Force-directed graph (d3-force), live trace view, dark mode.
+server/
+  index.ts      boot: connect FalkorDB, seed, start worker loop
+  app.ts        Express 5 routes, HMAC sessions, per-workspace scope, /api/graph/*
+  engine.ts     persisted state machine: claims, 60 s leases, approval gate, supersession
+  agents.ts     tool specs, tool runner with trace capture, Atlas/Sage/chat prompts, fallback policy
+  model.ts      OpenAI Responses + Anthropic Messages tool loops (bounded, read-only)
+  graph.ts      GraphTools interface
+  falkor.ts     FalkorStore (guarded writes, indexes) + FalkorGraph (all Cypher)
+  seed.ts       synthetic workspace graph
+tests/doubles.ts  in-memory Store + GraphTools used only by tests
+docs/queries.md   every query
+docs/explainer.md how it works, for the author
 ```
 
-Run the same critical graph workflow against a dedicated FalkorDB development instance:
+Agent loop: the model receives the incident and the tool list; it calls graph
+tools up to six rounds; every call is recorded as a trace with `nodeIds` and
+`paths`; it must finish with a structured verdict (root cause, ruled out,
+escalation; or procedure, fact, forbidden actions). The engine validates the
+verdict against the graph (the root cause must be a `Service`, the procedure
+must be active procedural memory, the fact must be active, nothing forbidden)
+before writing. If the model answers in prose without a verdict, the
+deterministic policy picks from the same tool results.
 
-```sh
-MEMORY_BACKEND=falkordb TEST_FALKORDB=1 npm test
-MEMORY_BACKEND=falkordb npm run benchmark
-```
+Recovery actions are simulated state changes in the sandbox, committed with the
+task checkpoint. Nothing here touches real infrastructure.
 
-The graph integration test seeds and writes sample graphs. Do not point it at production data. Benchmarks write to a separate `relayops_benchmark` graph (or SQLite tenant) and print the actual backend, measured latency, throughput, stored-write counts, and claim winners. SQLite uses synchronous calls within one process; its benchmark is not evidence of FalkorDB performance or distributed scalability.
+## Build history and disclosure
 
-## Demo in three minutes
+- **Before Oct 15:** an incident-workspace scaffold (UI, Express server,
+  agent state machine, tool interface, synthetic data) with a SQLite stand-in
+  store. Commits `0e86a54` through `8701d7f` (Oct 12–13) are that work and are
+  labelled as pre-event in their messages.
+- **During the event (Oct 15 onward):** the FalkorDB implementation
+  (`server/falkor.ts`: schema, indexes, guarded writes, every traversal,
+  full-text search, betweenness), removal of all non-graph code paths,
+  graph-native features in the UI, documentation, deployment. Commits from
+  `7766c9e` onward.
+- **AI assistance:** the code was written with Claude (via OpenCode) as a
+  coding assistant. The graph model, the agent design, the choice of
+  traversals, and every technical decision are the author's; the author can
+  explain all of it (see `docs/explainer.md`).
+- **Data:** entirely synthetic.
 
-1. Open **Shared memory → Graph view**. People, teams, services, incidents, memory, and decisions, with real edges.
-2. New incident → **Hidden neighbour**. Start it. Atlas runs `suspects`: orders-db (one hop) explains `pool.active`; notification-worker (two hops, sharing the database) explains `pool.active` and `worker.queue_depth`. Expand the trace to see the paths. Atlas names the worker and suggests who to page.
-3. Sage runs `decisions`, finds the rejected "automatic restart" decision, and proposes the worker drain runbook. The plan card shows what it will not do.
-4. Approve. Echo verifies and saves an episodic memory on the worker node; RB-11's verification count increments.
-5. In **Conversation**, ask "Who should I page and what else breaks if orders-db goes down?" The answer shows its `who_knows` and `blast_radius` queries.
-6. On a **Memory correction** incident, click **Introduce new evidence** at the approval step. The old fact is superseded, the plan is invalidated, and resume rebuilds it against the new endpoint.
-7. Switch to **Orbit Financial**. Different people, different history, nothing from Acme.
+## Limits
 
-To demonstrate abrupt worker recovery, kill only the app process while a task is running, restart it, and allow its 60-second lease to expire. The task can then be claimed again; an old worker's version cannot overwrite the new claim. Recovery effects in this prototype are stored state changes and committed atomically with their task checkpoint. Real external actions would require downstream idempotency support or an outbox, reconciliation, and independent verification.
-
-## Architecture and limits
-
-React + TypeScript + Vite, Express, a small persisted state-machine runner, and interchangeable FalkorDB / SQLite stores. UI polling is scoped to the authenticated workspace. The prototype loads the small workspace graph into the UI; pagination, bounded server-side search, richer graph layouts, independent worker processes, retention policies, and production identity/roles are future work.
-
-Hosted demo access requires `DEMO_ACCESS_CODE` and an explicit `HOST` value. Anyone with that demo code is a demo owner of both sample workspaces. This is **not production multitenant identity management**. Use HTTPS and `COOKIE_SECURE=true` when hosting. Replace demo access with an identity provider and per-user membership provisioning before using real company data. Only sample data is seeded.
-
-## Build provenance and event eligibility
-
-This prototype was started **October 12, 2026**, before Graph Hacks. The [published rules](https://www.wemakedevs.org/hackathons/falkordb) require the submission and main FalkorDB implementation to be new work completed during **October 15–18, 2026**. This repository must not be represented as work first created during that window. Confirm what pre-event material is permitted with the organizers and build the qualifying entry accordingly.
-
-The initial environment restricted Docker socket access and external package downloads. The SQLite preview can be validated here; FalkorDB integration and live model calls require an environment with the corresponding service and credentials. See `docs/verification.md` for the concrete validation record.
-
-## References
-
-- [FalkorDB TypeScript client](https://github.com/FalkorDB/falkordb-ts)
-- [Parameterized graph queries](https://docs.falkordb.com/commands/graph.query)
-- [FalkorDB persistence](https://docs.falkordb.com/operations/durability/persistence)
-- [Claude Messages API](https://platform.claude.com/docs/en/api/messages/create)
-- [OpenAI API authentication](https://developers.openai.com/api/reference/overview)
-- [OpenAI text generation and response parsing](https://developers.openai.com/api/docs/guides/text)
-- [GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
+Single-process worker loop; sample workspaces only; demo access code instead
+of real identity; simulated recovery effects; 60 s leases are a demo constant.
+Pagination, retention, and per-user membership are future work.

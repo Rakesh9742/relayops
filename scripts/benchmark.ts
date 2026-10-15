@@ -1,10 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
-import { createStore } from "../server/store";
+import { createBackend } from "../server/store";
 import { Engine } from "../server/engine";
 import { entity } from "../server/seed";
 
-const store = await createStore();
+const { store, graph } = await createBackend();
+if ("reset" in store) await (store as any).reset("benchmark");
 const tenant = "benchmark";
 const workers = Number(process.env.BENCH_WORKERS ?? 50);
 const writesPerWorker = 20;
@@ -34,7 +35,7 @@ await Promise.all(
 const duration = performance.now() - started;
 const task = entity(`claim-${run}`, "task", { status: "ready", leaseUntil: 0 });
 await store.commit(tenant, [task]);
-const engine = new Engine(store, 0, false);
+const engine = new Engine(store, graph, 0, false);
 const claims = await Promise.all(
   Array.from({ length: workers }, () => engine.claim(tenant, task.id)),
 );
@@ -55,7 +56,7 @@ console.log(
       elapsedMs: Math.round(duration),
       successfulClaims: claims.filter(Boolean).length,
       duplicateClaims: Math.max(0, claims.filter(Boolean).length - 1),
-      note: "Local load-generator results; no model calls. SQLite serializes synchronous operations inside one process. These results do not establish FalkorDB throughput or production scalability.",
+      note: "Local load-generator against a single FalkorDB instance; no model calls. Each pair is one guarded MERGE followed by a read. Not a production scalability claim.",
     },
     null,
     2,

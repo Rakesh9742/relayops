@@ -82,7 +82,8 @@ const labelOf = (kind: string) => {
   return l;
 };
 const relationOf = (rel: string) => {
-  if (!RELATIONS.has(rel as Relation)) throw new Error(`Unknown relation ${rel}`);
+  if (!RELATIONS.has(rel as Relation))
+    throw new Error(`Unknown relation ${rel}`);
   return rel;
 };
 const STRUCTURAL = "DEPENDS_ON|ROUTES_TO";
@@ -111,7 +112,8 @@ const props = (n: Entity) => {
     const v = n[k];
     if (v === undefined || v === null) continue;
     if (Array.isArray(v)) {
-      if (v.every((x) => typeof x === "string" || typeof x === "number")) p[k] = v;
+      if (v.every((x) => typeof x === "string" || typeof x === "number"))
+        p[k] = v;
     } else if (["string", "number", "boolean"].includes(typeof v)) p[k] = v;
   }
   return p;
@@ -136,7 +138,8 @@ export class FalkorStore implements Store {
   ) {}
 
   graphName(tenant: string) {
-    if (!/^[a-z0-9_-]{1,64}$/.test(tenant)) throw new Error("Invalid workspace");
+    if (!/^[a-z0-9_-]{1,64}$/.test(tenant))
+      throw new Error("Invalid workspace");
     return `${this.prefix}_${tenant}`;
   }
   private graph(tenant: string) {
@@ -183,9 +186,9 @@ export class FalkorStore implements Store {
   }
 
   async all(tenant: string) {
-    return (await this.query(tenant, "MATCH (n) RETURN n.payload AS payload")).map(
-      (r) => JSON.parse(r.payload),
-    );
+    return (
+      await this.query(tenant, "MATCH (n) RETURN n.payload AS payload")
+    ).map((r) => JSON.parse(r.payload));
   }
   async get(tenant: string, id: string) {
     const rows = await this.query(
@@ -220,7 +223,9 @@ export class FalkorStore implements Store {
       params[`p${i}`] = props(n);
       params[`id${i}`] = n.id;
       // Label is chosen server-side from a closed set; never from input.
-      parts.push(`MERGE (n${i}:${labelOf(n.kind)} {id:$id${i}}) SET n${i} = $p${i}`);
+      parts.push(
+        `MERGE (n${i}:${labelOf(n.kind)} {id:$id${i}}) SET n${i} = $p${i}`,
+      );
     });
     edges.forEach((e, i) => {
       params[`f${i}`] = e.from;
@@ -252,7 +257,11 @@ export class FalkorStore implements Store {
       this.query(tenant, "MATCH (n) RETURN count(n) AS c"),
       this.query(tenant, "MATCH ()-[e]->() RETURN count(e) AS c"),
     ]);
-    return { graph: this.graphName(tenant), nodes: nodes[0]?.c ?? 0, edges: edges[0]?.c ?? 0 };
+    return {
+      graph: this.graphName(tenant),
+      nodes: nodes[0]?.c ?? 0,
+      edges: edges[0]?.c ?? 0,
+    };
   }
   async reset(tenant: string) {
     try {
@@ -352,7 +361,8 @@ export class FalkorGraph implements GraphTools {
       });
     }
     return hits.sort(
-      (a, b) => a.depth - b.depth || b.rootCauseOf.length - a.rootCauseOf.length,
+      (a, b) =>
+        a.depth - b.depth || b.rootCauseOf.length - a.rootCauseOf.length,
     );
   }
 
@@ -388,7 +398,10 @@ export class FalkorGraph implements GraphTools {
         rootCause: r.rc ? JSON.parse(r.rc) : undefined,
         resolver: r.who ? JSON.parse(r.who) : undefined,
         learned: (r.learned as string[]).map((p) => JSON.parse(p)),
-        path: [...base, { from: node.id, relation: r.best.rel, to: r.best.svc }],
+        path: [
+          ...base,
+          { from: node.id, relation: r.best.rel, to: r.best.svc },
+        ],
         depth: base.length + 1,
       } as SimilarHit;
     });
@@ -466,16 +479,61 @@ export class FalkorGraph implements GraphTools {
     return rows[0] ? toSteps(rows[0].path) : undefined;
   }
 
-  /** Full-text search over memory titles and content. */
+  /** Full-text search over memory titles and content. Terms are OR-ed with light stemming so natural questions match. */
   async searchMemory(tenant: string, text: string, limit = 8) {
+    const STOP = new Set([
+      "the",
+      "and",
+      "for",
+      "with",
+      "that",
+      "this",
+      "have",
+      "from",
+      "about",
+      "know",
+      "anything",
+      "things",
+      "down",
+      "slow",
+      "slowing",
+      "does",
+      "did",
+      "what",
+      "when",
+      "why",
+      "how",
+      "are",
+      "was",
+      "were",
+      "any",
+      "our",
+      "your",
+    ]);
+    const terms = [
+      ...new Set(
+        text
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter((w) => w.length > 2 && !STOP.has(w))
+          .map((w) => w.replace(/(ing|es|s)$/, ""))
+          .filter((w) => w.length > 2),
+      ),
+    ];
+    if (!terms.length) return [];
+    // RediSearch syntax: prefix match on each stem, OR-ed.
+    const query = terms.map((t) => `${t}*`).join("|");
     const rows = await this.q(
       tenant,
       `CALL db.idx.fulltext.queryNodes('Memory', $q) YIELD node, score
        WHERE node.status = 'active'
        RETURN node.payload AS payload, score ORDER BY score DESC LIMIT ${limit}`,
-      { q: text },
+      { q: query },
     );
-    return rows.map((r) => ({ node: JSON.parse(r.payload) as Entity, score: r.score as number }));
+    return rows.map((r) => ({
+      node: JSON.parse(r.payload) as Entity,
+      score: r.score as number,
+    }));
   }
 
   /** Services ranked by how much of the call graph flows through them. */
@@ -486,7 +544,10 @@ export class FalkorGraph implements GraphTools {
        WITH node, score WHERE score > 0
        RETURN DISTINCT node.payload AS payload, score ORDER BY score DESC LIMIT ${limit}`,
     );
-    return rows.map((r) => ({ node: JSON.parse(r.payload) as Entity, score: r.score as number }));
+    return rows.map((r) => ({
+      node: JSON.parse(r.payload) as Entity,
+      score: r.score as number,
+    }));
   }
 }
 

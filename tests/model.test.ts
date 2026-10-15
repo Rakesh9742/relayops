@@ -8,7 +8,7 @@ import {
   ReasoningClient,
   type ModelConfig,
 } from "../server/model";
-import { SQLiteStore } from "../server/store";
+import { SQLiteStore, IndexedGraph } from "./doubles";
 import { seed, entity } from "../server/seed";
 import { Engine } from "../server/engine";
 
@@ -225,7 +225,7 @@ test("AI follow-ups retrieve saved incident conversation after restart and exclu
   );
   try {
     await seed(store);
-    let engine = new Engine(store, 0, true, config);
+    let engine = new Engine(store, new IndexedGraph(store), 0, true, config);
     const incident = await engine.create("acme", {
       title: "Remember operator context",
       description: "Sample",
@@ -253,7 +253,7 @@ test("AI follow-ups retrieve saved incident conversation after restart and exclu
     ]);
     await store.close();
     store = new SQLiteStore(path);
-    engine = new Engine(store, 0, true, config);
+    engine = new Engine(store, new IndexedGraph(store), 0, true, config);
     await engine.message(
       "acme",
       incident.id,
@@ -315,7 +315,7 @@ test("model failure preserves the task checkpoint and an explicit retry complete
   );
   try {
     await seed(store);
-    const engine = new Engine(store, 0, true, config);
+    const engine = new Engine(store, new IndexedGraph(store), 0, true, config);
     const incident = await engine.create("acme", {
       title: "Provider retry workflow",
       description: "Sample",

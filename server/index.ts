@@ -5,7 +5,7 @@ import { createApp } from "./app";
 const startedAt = Date.now();
 const { store, graph } = await createBackend();
 await seed(store);
-const engine = new Engine(store, undefined, undefined, undefined, graph);
+const engine = new Engine(store, graph);
 if (
   !(await store.all("acme")).some(
     (n) => n.kind === "incident" && n.id !== "inc-history",

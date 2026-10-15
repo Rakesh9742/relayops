@@ -114,6 +114,7 @@ const TOOL_LABELS: Record<string, string> = {
   decisions: "Decisions",
   who_knows: "Who knows this",
   memories: "Memory lookup",
+  search_memory: "Memory search",
   path: "Path",
 };
 
@@ -855,6 +856,61 @@ function LatestDecision({
   );
 }
 
+/** Services the call graph depends on most, by betweenness centrality computed in the database. */
+function CriticalServices({ state }: { state: Snapshot }) {
+  const rows = state.critical ?? [];
+  if (!rows.length) return null;
+  const byId = new Map(state.nodes.map((n) => [n.id, n]));
+  const max = rows[0].score || 1;
+  const blast = (id: string) => {
+    // downstream count from edges (reverse DEPENDS_ON/ROUTES_TO, 3 hops)
+    const seen = new Set<string>([id]);
+    let frontier = [id];
+    for (let d = 0; d < 3; d++) {
+      const next: string[] = [];
+      for (const e of state.edges)
+        if (
+          ["DEPENDS_ON", "ROUTES_TO"].includes(e.relation) &&
+          frontier.includes(e.to) &&
+          !seen.has(e.from)
+        ) {
+          seen.add(e.from);
+          next.push(e.from);
+        }
+      frontier = next;
+    }
+    return seen.size - 1;
+  };
+  return (
+    <section className="context-section" aria-label="Critical services">
+      <div className="section-heading">
+        <h2>Critical services</h2>
+        <span className="small-label">betweenness · computed in FalkorDB</span>
+      </div>
+      <div className="panel critical-panel">
+        {rows.map((r) => {
+          const n = byId.get(r.id);
+          if (!n) return null;
+          return (
+            <div className="critical-row" key={r.id}>
+              <i style={{ background: nodeColor(n) }} />
+              <div>
+                <strong>{n.name}</strong>
+                <small>{blast(r.id)} services break if it fails</small>
+              </div>
+              <span className="critical-bar">
+                <b
+                  style={{ width: `${Math.max(8, (r.score / max) * 100)}%` }}
+                />
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function Logo({ small = false }: { small?: boolean }) {
   return (
     <div className={`brand ${small ? "small" : ""}`}>
@@ -1462,12 +1518,10 @@ export default function App({
                       <span>·</span>
                       <span>State saved across sessions</span>
                       <span className="footnote-right">
-                        <i />{" "}
-                        {state.backend === "browser"
-                          ? "Browser demo"
-                          : state.backend === "sqlite"
-                            ? "Local preview"
-                            : "FalkorDB connected"}
+                        <i /> FalkorDB
+                        {state.graphStats
+                          ? ` · ${state.graphStats.graph} · ${state.graphStats.nodes} nodes / ${state.graphStats.edges} edges`
+                          : ""}
                       </span>
                     </div>
                   </div>
@@ -1565,6 +1619,7 @@ export default function App({
                       </div>
                     </section>
                     <OnCallNow state={state} />
+                    <CriticalServices state={state} />
                     <LatestDecision
                       state={state}
                       open={openIncident}
@@ -1604,11 +1659,9 @@ export default function App({
               </span>
               <span>
                 <span className="demo-dot" />{" "}
-                {state.backend === "browser"
-                  ? "Browser demo · saved on this device"
-                  : state.model === "simulation"
-                    ? "Simulation mode"
-                    : `${state.model === "openai" ? "OpenAI" : "Claude"} · sandbox workflow`}
+                {state.model === "simulation"
+                  ? "Simulation mode"
+                  : `${state.model === "openai" ? "OpenAI" : "Claude"} · sandbox workflow`}
                 <span className="footer-build">v0.1 / prototype</span>
               </span>
             </footer>
@@ -2920,18 +2973,16 @@ function SettingsPage({
             className={`badge status-${state.backend === "falkordb" ? "resolved" : "paused"}`}
           >
             <i />
-            {state.backend === "falkordb"
-              ? "FalkorDB connected"
-              : state.backend === "browser"
-                ? "Browser-local demo"
-                : "SQLite · local preview"}
+            FalkorDB connected
           </span>
           <p>
-            {state.backend === "falkordb"
-              ? "Each workspace has its own FalkorDB graph. Agents traverse relationships to retrieve memory."
-              : state.backend === "browser"
-                ? "This standalone demo stores sample data in this browser. Use one tab at a time. Run the local server for SQLite persistence or the FalkorDB-backed implementation."
-                : "This preview saves state to a local SQLite database. Select FalkorDB in the server configuration to run the graph-backed version."}
+            Each workspace is its own FalkorDB graph
+            {state.graphStats
+              ? ` (${state.graphStats.graph}: ${state.graphStats.nodes} nodes, ${state.graphStats.edges} relationships)`
+              : ""}
+            . Agents answer every question with a Cypher traversal; memory,
+            people, decisions, and history are nodes and typed relationships,
+            never a mirror of another store.
           </p>
           <div className="config-snippet">
             <code>MEMORY_BACKEND=falkordb</code>
@@ -3002,9 +3053,8 @@ function SettingsPage({
                 <code>OPENAI_MODEL=gpt-5.4-mini</code>
               </div>
               <small>
-                {state.backend === "browser"
-                  ? "OpenAI requires the local server. This standalone preview always uses simulation."
-                  : "Add your key to the server .env file, restart RelayOps, then test the connection here."}
+                Add your key to the server .env file, restart RelayOps, then
+                test the connection here.
               </small>
             </>
           )}
@@ -3025,9 +3075,7 @@ function SettingsPage({
             <div>
               <dt>Memory access</dt>
               <dd>
-                {state.backend === "browser"
-                  ? "Local sample workspace separation"
-                  : "Server-authenticated workspace scope"}
+                Server-authenticated workspace scope, one graph per workspace
               </dd>
             </div>
             <div>

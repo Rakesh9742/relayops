@@ -11,12 +11,13 @@
     "dev:api": "node --import tsx --watch --env-file-if-exists=.env server/index.ts",
     "dev:web": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "build:demo": "node --import tsx scripts/build-demo.ts",
     "start": "node --import tsx --env-file-if-exists=.env server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:browser": "playwright test",
     "benchmark": "node --import tsx --env-file-if-exists=.env scripts/benchmark.ts",
-    "format": "prettier --write src server scripts tests"
+    "format": "prettier --write src server scripts tests",
+    "test:falkordb": "TEST_FALKORDB=1 node --import tsx --test tests/*.test.ts",
+    "db": "docker compose up -d"
   },
   "dependencies": {
     "d3-drag": "^3.0.0",
@@ -29,6 +30,7 @@
     "lucide-react": "0.475.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "tsx": "4.22.4",
     "zod": "3.25.76"
   },
   "devDependencies": {
@@ -46,7 +48,6 @@
     "concurrently": "9.2.4",
     "esbuild": "^0.25.12",
     "prettier": "^3.8.1",
-    "tsx": "4.22.4",
     "typescript": "5.9.3",
     "vite": "6.4.3"
   },

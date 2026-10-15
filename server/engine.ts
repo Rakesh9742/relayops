@@ -1,7 +1,7 @@
 import type { AgentId, Edge, Entity, LiveActivity } from "../src/types";
 import type { Store } from "./store";
 import { entity } from "./seed";
-import { IndexedGraph, type GraphTools } from "./graph";
+import type { GraphTools } from "./graph";
 import {
   investigate,
   plan as draftPlan,
@@ -100,20 +100,18 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class Engine {
   private reasoning: ReasoningClient;
-  public graph: GraphTools;
   constructor(
     public store: Store,
+    public graph: GraphTools,
     public delay = 1800,
     public useModel = true,
     modelConfig?: ModelConfig,
-    graph?: GraphTools,
   ) {
     this.reasoning = new ReasoningClient(
       useModel
         ? (modelConfig ?? modelConfigFromEnv())
         : { provider: "simulation" },
     );
-    this.graph = graph ?? new IndexedGraph(store);
   }
   get modelInfo() {
     return this.reasoning.info;
