@@ -63,9 +63,15 @@ export function createApp(
     }
     next();
   });
-  app.get("/api/health", (_req, res) =>
-    res.json({ ok: true, backend: store.backend }),
-  );
+  app.get("/api/health", async (_req, res) => {
+    const graphs =
+      store.backend === "falkordb"
+        ? await Promise.all(
+            WORKSPACES.map((w) => (store as any).stats(w.id)),
+          ).catch(() => undefined)
+        : undefined;
+    res.json({ ok: true, backend: store.backend, graphs });
+  });
   app.post("/api/session", (req, res) => {
     const address = req.socket.remoteAddress ?? "";
     if (
@@ -133,6 +139,10 @@ export function createApp(
       modelInfo: engine.modelInfo,
       serverStartedAt: options.startedAt ?? 0,
       live: engine.live(tenant),
+      graphStats:
+        store.backend === "falkordb"
+          ? await (store as any).stats(tenant).catch(() => undefined)
+          : undefined,
     });
   });
   app.post("/api/model/check", async (_req, res) => {

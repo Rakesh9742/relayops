@@ -103,123 +103,24 @@ export class SQLiteStore implements Store {
   }
 }
 
-export class FalkorStore implements Store {
-  backend = "falkordb" as const;
-  constructor(
-    private db: {
-      selectGraph(name: string): {
-        query(
-          query: string,
-          options: { params: Record<string, any> },
-        ): Promise<{ data?: unknown }>;
-      };
-      close(): Promise<void>;
-    },
-    private prefix = "relayops",
-  ) {}
-  private graph(tenant: string) {
-    if (!/^[a-z0-9_-]{1,64}$/.test(tenant))
-      throw new Error("Invalid workspace");
-    return this.db.selectGraph(`${this.prefix}_${tenant}`);
-  }
-  private async query(
-    tenant: string,
-    query: string,
-    params: Record<string, any> = {},
-  ) {
-    const result = await this.graph(tenant).query(query, { params });
-    return (result.data ?? []) as Record<string, any>[];
-  }
-  async all(tenant: string) {
-    return (
-      await this.query(tenant, "MATCH (n:Entity) RETURN n.payload AS payload")
-    ).map((r) => JSON.parse(r.payload));
-  }
-  async get(tenant: string, id: string) {
-    const rows = await this.query(
-      tenant,
-      "MATCH (n:Entity {id:$id}) RETURN n.payload AS payload",
-      { id },
-    );
-    return rows[0] ? (JSON.parse(rows[0].payload) as Entity) : undefined;
-  }
-  async edges(tenant: string) {
-    return (await this.query(
-      tenant,
-      "MATCH (a:Entity)-[e:LINK]->(b:Entity) RETURN a.id AS from, b.id AS to, e.relation AS relation",
-    )) as Edge[];
-  }
-  async commit(
-    tenant: string,
-    nodes: Entity[],
-    edges: Edge[] = [],
-    guards: Guard[] = [],
-  ) {
-    if (!nodes.length) return true;
-    const params: Record<string, any> = {};
-    const parts: string[] = [];
-    guards.forEach((g, i) => {
-      params[`g${i}`] = g.id;
-      params[`v${i}`] = g.version;
-      parts.push(`MATCH (g${i}:Entity {id:$g${i}}) WHERE g${i}.version=$v${i}`);
-    });
-    if (guards.length) parts.push("WITH *");
-    nodes.forEach((n, i) => {
-      params[`id${i}`] = n.id;
-      params[`payload${i}`] = JSON.stringify(n);
-      params[`kind${i}`] = n.kind;
-      params[`version${i}`] = n.version;
-      params[`status${i}`] = n.status ?? "";
-      params[`incident${i}`] = n.incidentId ?? "";
-      parts.push(
-        `MERGE (n${i}:Entity {id:$id${i}}) SET n${i}.payload=$payload${i}, n${i}.kind=$kind${i}, n${i}.version=$version${i}, n${i}.status=$status${i}, n${i}.incidentId=$incident${i}`,
-      );
-    });
-    edges.forEach((e, i) => {
-      params[`from${i}`] = e.from;
-      params[`to${i}`] = e.to;
-      params[`rel${i}`] = e.relation;
-      parts.push(
-        `WITH * MATCH (a${i}:Entity {id:$from${i}}), (b${i}:Entity {id:$to${i}}) MERGE (a${i})-[:LINK {relation:$rel${i}}]->(b${i})`,
-      );
-    });
-    parts.push("RETURN 1 AS committed");
-    return (await this.query(tenant, parts.join("\n"), params)).length > 0;
-  }
-  async context(tenant: string, incidentId: string) {
-    return (
-      await this.query(
-        tenant,
-        `MATCH (i:Entity {id:$incidentId})-[:LINK*1..3]->(m:Entity)
-      WHERE m.kind='memory' AND m.status='active' RETURN DISTINCT m.payload AS payload`,
-        { incidentId },
-      )
-    ).map((r) => JSON.parse(r.payload));
-  }
-  async close() {
-    await this.db.close();
-  }
+export async function createStore(): Promise<Store> {
+  return (await createBackend()).store;
 }
 
-export async function createStore(): Promise<Store> {
+/** Store plus the graph tools that answer agent questions natively on that store. */
+export async function createBackend(): Promise<{
+  store: Store;
+  graph?: import("./graph").GraphTools;
+}> {
   if (process.env.MEMORY_BACKEND === "falkordb") {
-    const packageName = "falkordb";
-    const { FalkorDB } = await import(packageName).catch(() => {
+    const { connectFalkor } = await import("./falkor");
+    try {
+      return await connectFalkor();
+    } catch (err) {
       throw new Error(
-        "Install the FalkorDB adapter with: npm install falkordb",
+        `FalkorDB is not reachable at ${process.env.FALKORDB_HOST ?? "127.0.0.1"}:${process.env.FALKORDB_PORT ?? 6379}. Start it with: docker compose up -d. (${err instanceof Error ? err.message : err})`,
       );
-    });
-    const db = await FalkorDB.connect({
-      socket: {
-        host: process.env.FALKORDB_HOST ?? "127.0.0.1",
-        port: Number(process.env.FALKORDB_PORT ?? 6387),
-        connectTimeout: 5000,
-        reconnectStrategy: false,
-      },
-      username: process.env.FALKORDB_USERNAME || undefined,
-      password: process.env.FALKORDB_PASSWORD || undefined,
-    });
-    return new FalkorStore(db);
+    }
   }
-  return new SQLiteStore(process.env.SQLITE_PATH ?? ".data/relayops.db");
+  return { store: new SQLiteStore(process.env.SQLITE_PATH ?? ".data/relayops.db") };
 }

@@ -210,11 +210,11 @@ export class ToolRunner {
             via: pathText(h.path),
             ...(this.liveSignals.length
               ? {
-                  signalMatch: `${matched.size}/${live.length} diagnostic signals explained, ${expectedMissing.length} expected but absent (fit ${fit})`,
                   fit,
+                  fitExplanation: `fit ${fit} = ${matched.size} live signals explained − ${expectedMissing.length} signals this cause would produce but are NOT present${expectedMissing.length ? ` (${expectedMissing.join(", ")} absent, which argues AGAINST this suspect)` : ""}`,
                   liveSignalsExplained: [...matched],
                   liveSignalsUnexplained: unexplained,
-                  expectedSignalsNotSeen: expectedMissing,
+                  contradictingAbsence: expectedMissing,
                 }
               : {}),
             rootCauseOf: `${h.rootCauseOf.length} past incidents`,
@@ -468,7 +468,7 @@ async function simulatedInvestigation(
   const blast =
     runner.traces.find((t) => t.tool === "blast_radius")?.nodeIds ?? [];
   return {
-    summary: `${top.service.name} explains ${top.signalMatch ?? "the live signals"} (${(top.liveSignalsExplained ?? []).join(", ") || "none"}); ${top.rootCauseOf}. Supporting memory: ${supporting.join(", ")}. Ruled out ${ranked
+    summary: `${top.service.name} explains fit ${top.fit ?? "?"} (${(top.liveSignalsExplained ?? []).join(", ") || "none"}); ${top.rootCauseOf}. Supporting memory: ${supporting.join(", ")}. Ruled out ${ranked
       .slice(1, 4)
       .map(
         (s) =>
@@ -549,7 +549,7 @@ export async function investigate(
     return simulatedInvestigation(runner, incident);
   const run = await client.runTools(
     SYSTEM.replace("{agent}", "Atlas, the investigator") +
-      ` Method: 1) Call suspects on the affected service. Results are sorted by signalMatch. 2) Decision rule: pick the suspect with the highest "fit" = diagnostic signals it explains minus signals its memory says it would also produce but which are absent (expectedSignalsNotSeen). A cause that would produce a signal we do not see is a poor fit. Symptom signals on the affected service itself (http.error_rate, p95.latency, logouts) are consequences of any cause and never discriminate; do not count them. Past-incident counts and hop distance only break ties. 3) Call similar_incidents on the AFFECTED service (not the suspect) to see history across the whole dependency scope. 4) Call blast_radius on your chosen root cause. 5) Call who_knows on the root cause. Then call finish. In the summary, name the decisive diagnostic signal(s), the suspect you ruled out, and why.`,
+      ` Method: 1) Call suspects on the affected service. Results are sorted by signalMatch. 2) Decision rule: pick the suspect with the highest numeric "fit". Results are already sorted by fit; the first entry is the leading suspect unless it ties. "contradictingAbsence" lists signals that cause WOULD produce but which are NOT in the live signals; each one counts AGAINST that suspect, never for it. Never choose a suspect with a lower fit because of its history or because it "predicts" a signal; a predicted signal that is absent is evidence against. Symptom signals on the affected service itself (http.error_rate, p95.latency, logouts) are consequences of any cause and never discriminate. Past-incident counts and hop distance only break exact ties. 3) Call similar_incidents on the AFFECTED service (not the suspect) to see history across the whole dependency scope. 4) Call blast_radius on your chosen root cause. 5) Call who_knows on the root cause. Then call finish. In the summary, name the decisive diagnostic signal(s), the suspect you ruled out, and why.`,
     JSON.stringify({
       incident: {
         id: incident.id,

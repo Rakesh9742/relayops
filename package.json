@@ -25,18 +25,11 @@
     "d3-transition": "^3.0.1",
     "d3-zoom": "^3.0.0",
     "express": "5.2.1",
+    "falkordb": "6.8.0",
     "lucide-react": "0.475.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "zod": "3.25.76"
-  },
-  "peerDependencies": {
-    "falkordb": "*"
-  },
-  "peerDependenciesMeta": {
-    "falkordb": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

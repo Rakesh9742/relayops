@@ -1,10 +1,25 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SQLiteStore } from "../server/store";
-import { seed, buildWorkspaceGraph } from "../server/seed";
-import { IndexedGraph } from "../server/graph";
+import { seed, buildWorkspaceGraph, WORKSPACES } from "../server/seed";
+import { IndexedGraph, type GraphTools } from "../server/graph";
+import type { Store } from "../server/store";
 
-async function fixture() {
+/**
+ * The same assertions run against the in-memory index (default) and against
+ * FalkorDB when TEST_FALKORDB=1. Both must agree.
+ */
+const useFalkor = process.env.TEST_FALKORDB === "1";
+async function fixture(): Promise<{ store: Store; graph: GraphTools }> {
+  if (useFalkor) {
+    process.env.FALKORDB_PREFIX = "relayops_test_graph";
+    const { connectFalkor } = await import("../server/falkor");
+    const { store, graph } = await connectFalkor();
+    (store as any).prefix = process.env.FALKORDB_PREFIX;
+    for (const w of WORKSPACES) await store.reset(w.id);
+    await seed(store);
+    return { store, graph };
+  }
   const store = new SQLiteStore(":memory:");
   await seed(store);
   return { store, graph: new IndexedGraph(store) };

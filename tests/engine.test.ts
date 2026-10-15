@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SQLiteStore, createStore } from "../server/store";
+import { SQLiteStore } from "../server/store";
 import { seed } from "../server/seed";
 import { Engine } from "../server/engine";
 
@@ -262,11 +262,15 @@ test(
   "FalkorDB integration: scoped traversal, guarded writes, correction and complete recovery",
   { skip: process.env.TEST_FALKORDB !== "1" },
   async () => {
-    const store = await createStore();
+    process.env.FALKORDB_PREFIX = "relayops_test_engine";
+    const { connectFalkor } = await import("../server/falkor");
+    const { store, graph } = await connectFalkor();
     assert.equal(store.backend, "falkordb");
     try {
+      await store.reset("acme");
+      await store.reset("orbit");
       await seed(store);
-      const engine = new Engine(store, 0, false);
+      const engine = new Engine(store, 0, false, undefined, graph);
       const incident = await engine.create("acme", {
         title: "FalkorDB integration incident",
         description: "Graph-backed integration test",
@@ -287,7 +291,36 @@ test(
       await engine.action("acme", incident.id, "approve");
       await engine.step("acme", incident.id);
       await engine.step("acme", incident.id);
-      assert.equal((await store.get("acme", incident.id))?.status, "resolved");
+      const done = await store.get("acme", incident.id);
+      assert.equal(done?.status, "resolved");
+      assert.equal(done?.investigation.rootCauseServiceId, "service-db");
+      // Writes landed as typed labels and relationships, not a generic blob.
+      const typed = await store.query(
+        "acme",
+        "MATCH (i:Incident {id:$id})-[:ROOT_CAUSE]->(s:Service) RETURN s.id AS id",
+        { id: incident.id },
+      );
+      assert.equal(typed[0]?.id, "service-db");
+      const learned = await store.query(
+        "acme",
+        "MATCH (s:Service {id:'service-db'})-[:HAS_MEMORY]->(m:Memory {category:'episodic'})-[:LEARNED_FROM]->(i:Incident {id:$id}) RETURN m.id AS id",
+        { id: incident.id },
+      );
+      assert.equal(learned.length, 1);
+      const superseded = await store.query(
+        "acme",
+        "MATCH (n:Memory)-[:SUPERSEDES]->(o:Memory {id:'mem-topology', status:'superseded'}) RETURN n.database AS db",
+      );
+      assert.equal(superseded[0]?.db, "orders-db-v2");
+      // Graph-native features
+      const found = await graph.searchMemory("acme", "connection pool");
+      assert.ok(found.some((f) => f.node.id === "mem-playbook"));
+      const critical = await graph.criticalServices("acme");
+      assert.ok(critical.length > 0);
+      assert.ok(critical.slice(0, 3).some((c) => ["service-checkout", "service-gateway"].includes(c.node.id)));
+      const stats = await store.stats("acme");
+      assert.ok(stats.nodes > 50 && stats.edges > 100);
+      assert.equal(stats.graph, "relayops_test_engine_acme");
     } finally {
       await store.close();
     }
