@@ -58,6 +58,7 @@
     "type-is": {
       "content-type": "2.0.0"
     },
-    "proxy-addr": "^2.0.8"
+    "proxy-addr": "^2.0.8",
+    "shell-quote": "^1.11.0"
   }
 }
