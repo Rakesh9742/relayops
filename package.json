@@ -57,6 +57,7 @@
     "body-parser": "2.2.2",
     "type-is": {
       "content-type": "2.0.0"
-    }
+    },
+    "proxy-addr": "^2.0.8"
   }
 }
